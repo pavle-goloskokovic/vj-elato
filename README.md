@@ -35,7 +35,19 @@ The Stick tab's filter lists, besides every file: your own collections from `vj-
 
 ## Catalog
 
-`catalog/*.json` are built by `tools/build_catalog.py` from a scan of both sites (film list, shot numbers, collection membership, Spelunkr manifests, archive.org file sizes). `tools/download_destockd.py` fetches a set of Destockd clips to a folder and writes the `destockd-index.json` the controller uses to recognise them.
+`catalog/*.json` are built by `tools/build_catalog.py` from the raw scan in `data/catalog-scan/` (film list, shot numbers, collection membership, Spelunkr manifests, archive.org file sizes; the large metadata files are kept gzipped, see the README there). `tools/download_destockd.py` fetches a set of Destockd clips to a folder and writes the `destockd-index.json` the controller uses to recognise them.
+
+## Repository layout
+
+| | |
+|---|---|
+| `index.html`, `player.html`, `controller.html`, `css/`, `js/`, `catalog/` | the tool; this is all that gets published |
+| `tools/` | catalog build, Destockd download, local servers, portable copy |
+| `data/catalog-scan/` | raw scan of Destockd and Spelunkr, 2026-11-09 |
+| `tests/` | browser tests, see `tests/README.md` |
+| `.github/workflows/pages.yml` | stages the runtime files with `make_portable.py`, deploys them to GitHub Pages and keeps a zip as a workflow artifact |
+
+Pages is published by the workflow, not from the branch, so the scan data and tests never go to the site. Pushes that touch only `data/` or `tests/` do not redeploy.
 
 The footage is public domain, hosted by the Internet Archive and indexed by two small independent sites. Donate to them if you use this.
 

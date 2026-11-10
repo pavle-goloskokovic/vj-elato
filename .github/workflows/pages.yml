@@ -1,0 +1,61 @@
+# Publishes only what the tool needs at runtime (the two pages, css, js, catalog
+# and the local-server scripts) to GitHub Pages, staged by tools/make_portable.py,
+# and keeps a zip of the same folder as a downloadable artifact for a USB stick.
+# Pushes that touch only data, tests or docs do not redeploy.
+name: pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - index.html
+      - player.html
+      - controller.html
+      - css/**
+      - js/**
+      - catalog/**
+      - tools/make_portable.py
+      - tools/serve.*
+      - README.md
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Stage the runtime files
+        run: python tools/make_portable.py dist
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist/vj-elato
+      - name: Keep a portable copy
+        uses: actions/upload-artifact@v4
+        with:
+          name: vj-elato-portable
+          path: dist/vj-elato
+          retention-days: 30
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

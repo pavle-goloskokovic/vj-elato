@@ -1,12 +1,14 @@
 """Static file server with HTTP Range support, so <video> can seek.
 
-usage: python serve.py [port]      serves the folder this file is in
+usage: python serve.py [port] [folder] [--no-browser]     default: the folder this file is in
 """
 import os, re, sys, webbrowser, threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
+ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
+ROOT = os.path.abspath(ARGS[1]) if len(ARGS) > 1 else os.path.dirname(os.path.abspath(__file__))
+PORT = int(ARGS[0]) if ARGS else 8765
+OPEN = "--no-browser" not in sys.argv
 
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **k): super().__init__(*a, directory=ROOT, **k)
@@ -45,6 +47,6 @@ if __name__ == "__main__":
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     url = f"http://localhost:{PORT}/"
     print(f"VJ Elato: serving {ROOT}\n  {url}   (Ctrl+C to stop)")
-    threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    if OPEN: threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try: srv.serve_forever()
     except KeyboardInterrupt: pass

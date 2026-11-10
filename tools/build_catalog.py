@@ -1,12 +1,18 @@
 """Build the compact catalogs the controller loads, from the raw scan data.
 
-usage: python -I tools/build_catalog.py <scan_dir> <out_dir>
+usage: python -I tools/build_catalog.py [scan_dir] [out_dir]   (defaults: data/catalog-scan, catalog)
 scan_dir holds destockd_films.json, destockd_collections.json, lineup.json, manifests/, spelunkr_meta.json, vs_meta.json
 """
-import glob, json, os, re, sys, time, urllib.parse
+import glob, gzip, json, os, re, sys, time, urllib.parse
 
-scan, out = sys.argv[1], sys.argv[2]
-rd = lambda p: json.load(open(os.path.join(scan, p), encoding="utf-8"))
+scan = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "catalog-scan")
+out = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "catalog")
+
+def rd(name):
+    """Read a JSON file from the scan folder; large ones are kept gzipped in the repo."""
+    p = os.path.join(scan, name)
+    if os.path.exists(p): return json.load(open(p, encoding="utf-8"))
+    with gzip.open(p + ".gz", "rt", encoding="utf-8") as f: return json.load(f)
 
 # ---------- Destockd ----------
 films_raw = rd("destockd_films.json")
