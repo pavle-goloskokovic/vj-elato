@@ -72,6 +72,7 @@
           <label>strobe <input type="range" data-master="strobe" min="0" max="20" step="0.5" value="0"><output></output></label>
           <label>render <select data-master="scale"><option value="0.5">50%</option><option value="0.75" selected>75%</option><option value="1">100%</option></select></label>
           <button class="reset" id="master-reset">reset master fx</button>
+          <span id="master-hint" class="hint hidden">feedback needs a deck on WebGL: load a clip from the stick. Streams only get the strobe.</span>
         </div>
       </div>
     </section>
@@ -109,8 +110,8 @@
         <label><span>rgb shift <small>gl</small></span> <input type="range" data-param="rgbShift" min="0" max="1" step="0.01" value="0"><output></output></label>
         <label><span>posterize <small>gl</small></span> <input type="range" data-param="posterize" min="0" max="16" step="1" value="0"><output></output></label>
         <label><span>threshold <small>gl</small></span> <input type="range" data-param="threshold" min="0" max="1" step="0.01" value="0"><output></output></label>
-        <label><span>mirror <small>gl</small></span> <select data-param="mirror"><option value="0">off</option><option value="1">left–right</option><option value="2">top–bottom</option><option value="3">quad</option></select></label>
-        <label><span>kaleido <small>gl</small></span> <select data-param="kaleido"><option value="0">off</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="8">8</option><option value="12">12</option><option value="16">16</option></select></label>
+        <label><span>mirror <small>gl</small></span> <input type="range" data-param="mirror" data-steps="0,1,2,3" data-labels="off,left–right,top–bottom,quad" min="0" max="3" step="1" value="0"><output></output></label>
+        <label><span>kaleido <small>gl</small></span> <input type="range" data-param="kaleido" data-steps="0,3,4,5,6,8,12,16" data-labels="off,3,4,5,6,8,12,16" min="0" max="7" step="1" value="0"><output></output></label>
         <button class="reset">reset fx</button>
       </div>
     </div>

@@ -151,7 +151,16 @@ export class Stage {
 
   _frame(now) {
     this._raf = requestAnimationFrame((t) => this._frame(t));
-    if (!this.renderer || !this.enabled) return;
+    if (!this.enabled) return;
+    // strobe for CSS-mode decks: blink the video layer itself
+    const strobe = this.master.strobe || 0;
+    const lit = strobe > 0 ? ((now / 1000 * strobe) % 1 < 0.5) : true;
+    for (const name of ['A', 'B']) {
+      const v = this.videos[name];
+      if (this.decks[name].mode === 'css') v.style.visibility = lit ? '' : 'hidden';
+      else if (v.style.visibility) v.style.visibility = '';
+    }
+    if (!this.renderer) return;
     const decks = {};
     let anyGl = false;
     for (const name of ['A', 'B']) {

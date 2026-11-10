@@ -6,7 +6,10 @@ import { Stage, DEFAULT_PARAMS, DEFAULT_MASTER } from './stage.js';
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const bus = createBus('controller');
-const KEEP_ON_RESET = new Set(['loop', 'fit', 'blend', 'opacity', 'speed', 'crossfade', 'blackout', 'scale']);
+// "reset fx" on a deck puts every control back except loop and fit; on the master it
+// leaves the crossfader, blackout and render size alone.
+const KEEP_ON_RESET = new Set(['loop', 'fit']);
+const KEEP_ON_MASTER_RESET = new Set(['crossfade', 'blackout', 'scale']);
 const STORE_KEY = 'vj-elato-controller';
 
 const state = {
@@ -58,15 +61,21 @@ for (const name of ['A', 'B']) {
   deckEls[name] = el;
 }
 
+// A range with data-steps="0,3,4,6" is a stepped slider: its position is an
+// index into that list, and data-labels gives the text shown for each step.
+const steps = (input) => input.dataset.steps ? input.dataset.steps.split(',').map(Number) : null;
 function readInput(input) {
   if (input.type === 'checkbox') return input.checked;
   if (input.tagName === 'SELECT') return isNaN(Number(input.value)) ? input.value : Number(input.value);
+  const st = steps(input);
+  if (st) return st[Math.min(st.length - 1, Math.max(0, Math.round(parseFloat(input.value))))];
   return parseFloat(input.value);
 }
 function showOutput(input) {
   const out = input.parentElement.querySelector('output');
   if (!out) return;
   const v = readInput(input);
+  if (input.dataset.labels) { out.value = input.dataset.labels.split(',')[Math.round(parseFloat(input.value))] ?? String(v); return; }
   if (typeof v !== 'number') { out.value = ''; return; }
   const step = parseFloat(input.step || '1');
   out.value = step >= 1 ? String(v) : step >= 0.1 ? v.toFixed(1) : v.toFixed(2);
@@ -81,7 +90,10 @@ function bindInputs(root, attr, onChange) {
   }
 }
 function setInput(input, value) {
-  if (input.type === 'checkbox') input.checked = !!value; else input.value = value;
+  const st = steps(input);
+  if (input.type === 'checkbox') input.checked = !!value;
+  else if (st) { const i = st.indexOf(Number(value)); input.value = i < 0 ? 0 : i; }
+  else input.value = value;
   showOutput(input);
 }
 
@@ -125,7 +137,7 @@ bindInputs(document, 'data-master', setMaster);
 $('#master-reset').addEventListener('click', () => {
   for (const input of $$('.master-params [data-master]')) {
     const key = input.dataset.master;
-    if (KEEP_ON_RESET.has(key)) continue;
+    if (KEEP_ON_MASTER_RESET.has(key)) continue;
     setInput(input, DEFAULT_MASTER[key]);
     setMaster(key, DEFAULT_MASTER[key]);
   }
@@ -199,6 +211,9 @@ function updateDeckStatus(name, s) {
   } else badge.textContent = '';
   $('.mode', el).textContent = d.clip ? (s.mode === 'gl' ? 'webgl' : 'css only') : '';
   $('.mode', el).title = s.mode === 'gl' ? 'All effects available' : 'This source does not allow WebGL to read it (no CORS). Only the basic filters apply.';
+  d.mode = s.mode;
+  const anyGl = ['A', 'B'].some((n) => state.decks[n].clip && state.decks[n].mode === 'gl');
+  $('#master-hint').classList.toggle('hidden', anyGl || !['A', 'B'].some((n) => state.decks[n].clip));
   syncPreview(name, s);
 }
 
