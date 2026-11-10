@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>VJ Elato · Player</title>
+  <link rel="stylesheet" href="css/player.css">
+</head>
+<body>
+  <div id="stage">
+    <video id="deckA" muted playsinline preload="auto"></video>
+    <video id="deckB" muted playsinline preload="auto"></video>
+    <div id="black"></div>
+  </div>
+  <div id="overlay">
+    <div class="card">
+      <h1>VJ Elato · Player</h1>
+      <p id="overlay-msg">Waiting for a controller. Open <a href="controller.html" target="_blank">controller.html</a> in another tab of this browser.</p>
+      <p class="hint">Click here or press <kbd>F</kbd> for fullscreen. <kbd>H</kbd> hides this panel.</p>
+    </div>
+  </div>
+  <script type="module" src="js/player.js"></script>
+</body>
+</html>

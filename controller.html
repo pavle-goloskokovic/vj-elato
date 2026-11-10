@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>VJ Elato · Controller</title>
+  <link rel="stylesheet" href="css/controller.css">
+</head>
+<body>
+  <header>
+    <div class="brand">VJ Elato</div>
+    <div id="player-status" class="pill off">no player</div>
+    <button id="open-player">Open player</button>
+    <button id="pick-folder" title="Pick the folder with your clips (USB stick)">Clip folder…</button>
+    <span id="folder-status" class="muted"></span>
+    <span class="spacer"></span>
+    <label class="toggle"><input type="checkbox" id="blackout"> <span>Blackout <kbd>B</kbd></span></label>
+  </header>
+
+  <main>
+    <section id="library">
+      <nav class="tabs">
+        <button data-tab="stick">Stick</button>
+        <button data-tab="destockd" class="active">Destockd</button>
+        <button data-tab="spelunkr">Spelunkr</button>
+        <button data-tab="url">URL</button>
+      </nav>
+      <div class="lib-controls">
+        <input id="search" type="search" placeholder="Search…" autocomplete="off">
+        <select id="filter"></select>
+        <span id="count" class="muted"></span>
+        <span class="spacer"></span>
+        <label class="muted">load to
+          <select id="target-deck"><option value="A">A</option><option value="B">B</option></select>
+        </label>
+      </div>
+      <div id="url-panel" class="hidden">
+        <input id="url-input" type="url" placeholder="https://…/clip.mp4">
+        <button id="url-load">Load</button>
+        <p class="muted">Any direct video URL. archive.org files work; most other hosts work too if they allow playback from another site.</p>
+      </div>
+      <div id="results"></div>
+    </section>
+
+    <section id="mixer">
+      <div class="decks">
+        <div class="deck" data-deck="A">
+          <div class="deck-head"><span class="deck-name">A</span><span class="title">empty</span></div>
+          <div class="preview"><img alt=""><span class="badge"></span></div>
+          <div class="time"><span class="t">0:00</span> / <span class="d">–:––</span></div>
+          <input type="range" class="scrub" min="0" max="1000" value="0">
+          <div class="transport">
+            <button data-cmd="play">▶ <kbd>1</kbd></button>
+            <button data-cmd="pause">❚❚</button>
+            <button data-cmd="restart">⟲</button>
+            <label><input type="checkbox" data-param="loop" checked> loop</label>
+            <label>fit <select data-param="fit"><option value="contain">contain</option><option value="cover">cover</option></select></label>
+          </div>
+          <div class="params">
+            <label>opacity <input type="range" data-param="opacity" min="0" max="1" step="0.01" value="1"><output>1.00</output></label>
+            <label>speed <input type="range" data-param="speed" min="0.1" max="3" step="0.05" value="1"><output>1.00</output></label>
+            <label>hue <input type="range" data-param="hue" min="0" max="360" step="1" value="0"><output>0</output></label>
+            <label>saturate <input type="range" data-param="saturate" min="0" max="3" step="0.05" value="1"><output>1.00</output></label>
+            <label>contrast <input type="range" data-param="contrast" min="0" max="3" step="0.05" value="1"><output>1.00</output></label>
+            <label>brightness <input type="range" data-param="brightness" min="0" max="3" step="0.05" value="1"><output>1.00</output></label>
+            <label>invert <input type="range" data-param="invert" min="0" max="1" step="0.01" value="0"><output>0.00</output></label>
+            <label>blur <input type="range" data-param="blur" min="0" max="30" step="0.5" value="0"><output>0</output></label>
+            <button class="reset">reset fx</button>
+          </div>
+        </div>
+
+        <div class="deck" data-deck="B">
+          <div class="deck-head"><span class="deck-name">B</span><span class="title">empty</span></div>
+          <div class="preview"><img alt=""><span class="badge"></span></div>
+          <div class="time"><span class="t">0:00</span> / <span class="d">–:––</span></div>
+          <input type="range" class="scrub" min="0" max="1000" value="0">
+          <div class="transport">
+            <button data-cmd="play">▶ <kbd>2</kbd></button>
+            <button data-cmd="pause">❚❚</button>
+            <button data-cmd="restart">⟲</button>
+            <label><input type="checkbox" data-param="loop" checked> loop</label>
+            <label>fit <select data-param="fit"><option value="contain">contain</option><option value="cover">cover</option></select></label>
+          </div>
+          <div class="params">
+            <label>opacity <input type="range" data-param="opacity" min="0" max="1" step="0.01" value="1"><output>1.00</output></label>
+            <label>speed <input type="range" data-param="speed" min="0.1" max="3" step="0.05" value="1"><output>1.00</output></label>
+            <label>hue <input type="range" data-param="hue" min="0" max="360" step="1" value="0"><output>0</output></label>
+            <label>saturate <input type="range" data-param="saturate" min="0" max="3" step="0.05" value="1"><output>1.00</output></label>
+            <label>contrast <input type="range" data-param="contrast" min="0" max="3" step="0.05" value="1"><output>1.00</output></label>
+            <label>brightness <input type="range" data-param="brightness" min="0" max="3" step="0.05" value="1"><output>1.00</output></label>
+            <label>invert <input type="range" data-param="invert" min="0" max="1" step="0.01" value="0"><output>0.00</output></label>
+            <label>blur <input type="range" data-param="blur" min="0" max="30" step="0.5" value="0"><output>0</output></label>
+            <label>blend <select data-param="blend">
+              <option>normal</option><option>screen</option><option>multiply</option><option>difference</option>
+              <option>lighten</option><option>darken</option><option>overlay</option><option>hard-light</option>
+              <option>exclusion</option><option>luminosity</option>
+            </select></label>
+            <button class="reset">reset fx</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="master">
+        <span class="deck-name">A</span>
+        <input type="range" id="crossfade" min="0" max="1" step="0.005" value="0">
+        <span class="deck-name">B</span>
+        <span class="muted">crossfader <kbd>←</kbd> <kbd>→</kbd></span>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="js/controller.js"></script>
+</body>
+</html>
