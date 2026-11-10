@@ -33,18 +33,18 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Stage the runtime files
         run: python tools/make_portable.py dist
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: dist/vj-elato
       - name: Keep a portable copy
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vj-elato-portable
           path: dist/vj-elato
@@ -58,4 +58,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
