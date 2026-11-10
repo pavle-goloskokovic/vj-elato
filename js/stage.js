@@ -8,7 +8,7 @@
 // without CORS headers is left as a visible <video> layer with CSS filters:
 // video A sits under the canvas, video B above it.
 
-import { createRenderer } from './gl.js';
+import { createRenderer, crossfadeWeights } from './gl.js';
 
 export const DEFAULT_PARAMS = {
   opacity: 1, speed: 1, loop: true, fit: 'contain', blend: 'normal',
@@ -95,7 +95,7 @@ export class Stage {
   pause(name) { this.videos[name].pause(); }
   restart(name) { this.videos[name].currentTime = this.decks[name].in; this.play(name); }
   seek(name, t) { this.videos[name].currentTime = t; }
-  setParams(name, params) { Object.assign(this.decks[name].params, params); this.applyCss(name); }
+  setParams(name, params) { Object.assign(this.decks[name].params, params); this.applyCss('A'); this.applyCss('B'); }
   setMaster(params) {
     const scaleChanged = 'scale' in params && params.scale !== this.master.scale;
     Object.assign(this.master, params);
@@ -112,8 +112,8 @@ export class Stage {
   // when deck B is on the canvas above a CSS deck A.
   applyCss(name) {
     const v = this.videos[name], d = this.decks[name], p = d.params;
-    const x = this.master.crossfade;
-    const mix = name === 'A' ? Math.min(1, 2 * (1 - x)) : Math.min(1, 2 * x);
+    const [mA, mB] = crossfadeWeights(this.master.crossfade, this.decks.B.params.blend);
+    const mix = name === 'A' ? mA : mB;
     if (d.mode === 'gl' || !d.meta) {
       v.style.opacity = 0;
       v.style.filter = 'none';

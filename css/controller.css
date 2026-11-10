@@ -13,6 +13,7 @@ input[type=search], input[type=url], select { background: var(--panel2); border:
 input[type=range] { accent-color: var(--accent); }
 kbd { background: #333; border-radius: 4px; padding: 0 5px; font-size: 11px; color: #ccc; }
 .muted { color: var(--muted); }
+.hint { color: var(--accent); font-size: 12px; }
 .spacer { flex: 1; }
 .hidden { display: none !important; }
 
@@ -64,8 +65,8 @@ section { min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 .deck .mode { font-size: 11px; white-space: nowrap; }
 .deck .title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 /* live preview strip: deck A | output | deck B on one canvas, CSS-mode videos over the output pane */
-.preview-strip { position: relative; display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 6px; background: #000; border: 1px solid var(--line); border-radius: 10px; padding: 6px; }
-.preview-strip .pane { position: relative; aspect-ratio: 16/9; background: #050507; border-radius: 4px; overflow: clip; }
+.preview-strip { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; background: #000; border: 1px solid var(--line); border-radius: 10px; padding: 6px; }
+.preview-strip .pane { position: relative; min-width: 0; aspect-ratio: 16/9; background: #050507; border-radius: 4px; overflow: clip; }
 .preview-strip .pane img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .preview-strip .pane img[src=""], .preview-strip .pane img:not([src]) { display: none; }
 .preview-strip .pane .label { position: absolute; top: 4px; left: 6px; font-size: 11px; font-weight: 700; z-index: 5; text-shadow: 0 0 4px #000; }

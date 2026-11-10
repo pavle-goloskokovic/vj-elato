@@ -148,6 +148,16 @@ void main() {
   o = c * gain;
 }`;
 
+// Crossfader curve. With the normal blend, B simply sits on top of A, so a
+// linear fade is what you expect: 50 % shows half of each. With the other
+// blends both decks contribute all the way through, so both are at full
+// strength in the middle and only the outer halves fade.
+export function crossfadeWeights(x, blend) {
+  x = Math.min(1, Math.max(0, x || 0));
+  if (!blend || blend === 'normal') return [1 - x, x];
+  return [Math.min(1, 2 * (1 - x)), Math.min(1, 2 * x)];
+}
+
 export const BLEND_INDEX = {
   normal: 0, screen: 1, multiply: 2, difference: 3, lighten: 4, darken: 5,
   overlay: 6, 'hard-light': 7, exclusion: 8, add: 9,
@@ -278,9 +288,9 @@ export function createRenderer(canvas) {
     drawDeck('A', decks.A.params, decks.A.active);
     drawDeck('B', decks.B.params, decks.B.active);
 
-    const x = master.crossfade || 0;
-    const wA = (decks.A.params.opacity ?? 1) * Math.min(1, 2 * (1 - x));
-    const wB = (decks.B.params.opacity ?? 1) * Math.min(1, 2 * x);
+    const [mA, mB] = crossfadeWeights(master.crossfade, decks.B.params.blend);
+    const wA = (decks.A.params.opacity ?? 1) * mA;
+    const wB = (decks.B.params.opacity ?? 1) * mB;
     const prev = ping[pingIndex], next = ping[1 - pingIndex];
     gl.bindFramebuffer(gl.FRAMEBUFFER, next.fb);
     gl.viewport(0, 0, W, H);

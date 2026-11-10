@@ -199,13 +199,34 @@ function updateDeckStatus(name, s) {
   } else badge.textContent = '';
   $('.mode', el).textContent = d.clip ? (s.mode === 'gl' ? 'webgl' : 'css only') : '';
   $('.mode', el).title = s.mode === 'gl' ? 'All effects available' : 'This source does not allow WebGL to read it (no CORS). Only the basic filters apply.';
-  // keep the preview in step with the player
-  const pv = preview.videos[name];
-  if (state.live && d.clip && pv.readyState >= 1 && s.ready) {
-    if (Math.abs(pv.currentTime - s.time) > 0.6) pv.currentTime = s.time;
-    if (s.paused && !pv.paused) pv.pause();
-    if (!s.paused && pv.paused && !pv.ended) preview.play(name);
+  syncPreview(name, s);
+}
+
+// Keep the preview in step with the player: nudge it when it drifts, but only
+// into a range the element can actually seek to, at most every 2 s, and give
+// up on a source that answers seeks by jumping to 0 (a host without Range
+// support). The preview then simply free-runs from the start.
+function syncPreview(name, s) {
+  const d = state.decks[name], pv = preview.videos[name];
+  if (!state.live || !d.clip || pv.readyState < 1 || !s.ready) return;
+  if (s.paused && !pv.paused) pv.pause();
+  if (!s.paused && pv.paused && !pv.ended) preview.play(name);
+  if (s.paused || pv.seeking || d.noSeek) return;
+  const drift = Math.abs(pv.currentTime - s.time);
+  const now = Date.now();
+  if (d.seekAt && now - d.seekAt < 2000) {
+    if (d.seekTarget != null && !d.seekChecked && now - d.seekAt > 600) {
+      d.seekChecked = true;
+      if (Math.abs(pv.currentTime - d.seekTarget) > 1.5 && pv.currentTime < 0.5) d.noSeek = true;
+    }
+    return;
   }
+  if (drift <= 0.6) return;
+  let can = false;
+  for (let i = 0; i < pv.seekable.length; i++) if (s.time >= pv.seekable.start(i) && s.time <= pv.seekable.end(i)) can = true;
+  if (!can) return;
+  d.seekAt = now; d.seekTarget = s.time; d.seekChecked = false;
+  pv.currentTime = s.time;
 }
 
 // A running player answers 'state?' with what it holds; adopt it rather than
@@ -260,7 +281,7 @@ async function loadClip(name, clip) {
   const d = state.decks[name];
   const source = await resolveSource(clip);
   if (!source) { alert('This clip is not on the stick (or the folder is not connected) and has no URL.'); return; }
-  d.clip = clip; d.source = source; d.playing = true; d.duration = 0;
+  d.clip = clip; d.source = source; d.playing = true; d.duration = 0; d.noSeek = false; d.seekAt = 0;
   bus.send('load', { deck: name, source, meta: clipMeta(clip) });
   if (state.live) preview.load(name, source, clipMeta(clip));
   $('.title', deckEls[name]).textContent = clip.title;
@@ -270,16 +291,31 @@ async function loadClip(name, clip) {
   persist();
 }
 
-// After a restore: feed the preview stage (and the player, if it has nothing yet).
+// After a restore: feed the preview stage, and the player where it needs it.
+// A clip that was reachable only as a stream (folder not yet reconnected)
+// is upgraded to its stick file once the folder is back, so the WebGL
+// effects return; the player is moved to the file at its current time.
 async function loadPreviews(syncPlayer) {
   let changed = false;
   for (const name of ['A', 'B']) {
     const d = state.decks[name];
     if (!d.clip) continue;
-    if (!d.source) { d.source = await resolveSource(d.clip); changed = true; }
-    if (d.source && state.live) preview.load(name, d.source, { ...clipMeta(d.clip), paused: !d.playing });
+    const hadStream = d.source && d.source.kind === 'url';
+    if (!d.source || (hadStream && state.library)) {
+      const src = await resolveSource(d.clip);
+      if (!src || (hadStream && src.kind === 'url')) continue;      // nothing new
+      d.source = src; d.noSeek = false; d.seekAt = 0; changed = true;
+      if (hadStream && state.playerHasState) bus.send('load', { deck: name, source: src, meta: { ...clipMeta(d.clip), time: d.lastTime || 0, paused: !d.playing } });
+    }
+    if (d.source && state.live) preview.load(name, d.source, { ...clipMeta(d.clip), time: d.lastTime || 0, paused: !d.playing });
+    $('.badge', paneEls[name]).textContent = d.source.kind === 'file' ? 'stick' : 'stream';
   }
   if (syncPlayer && changed && state.playerNeedsSync) sendSync();
+  updateFolderHint();
+}
+function updateFolderHint() {
+  const waiting = ['A', 'B'].some((n) => { const d = state.decks[n]; return d.clip && (!d.source || (d.source.kind === 'url' && d.clip.localPath)) && !state.library; });
+  $('#folder-hint').classList.toggle('hidden', !waiting);
 }
 
 document.addEventListener('keydown', (e) => {
