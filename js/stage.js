@@ -15,6 +15,7 @@ export const DEFAULT_PARAMS = {
   hue: 0, saturate: 1, contrast: 1, brightness: 1, invert: 0, blur: 0,
   // WebGL only
   zoom: 1, rotate: 0, pixelate: 0, rgbShift: 0, posterize: 0, threshold: 0, mirror: 0, kaleido: 0,
+  cropX: 0, cropY: 0,
 };
 export const DEFAULT_MASTER = {
   crossfade: 0, blackout: false, feedback: 0, fbZoom: 1, fbRotate: 0, fbHue: 0, strobe: 0, scale: 0.75,
@@ -128,7 +129,11 @@ export class Stage {
         p.invert ? `invert(${p.invert})` : '',
         p.blur ? `blur(${p.blur}px)` : '',
       ].filter(Boolean).join(' ') || 'none';
-      v.style.transform = `scale(${p.zoom || 1}) rotate(${p.rotate || 0}deg)`;
+      // CSS cannot re-fit a cropped picture; trim the bars and scale up so cover still fills
+      const cx = Math.min(0.45, p.cropX || 0), cy = Math.min(0.45, p.cropY || 0);
+      const k = p.fit === 'cover' ? 1 / (1 - 2 * Math.max(cx, cy)) : 1;
+      v.style.clipPath = cx || cy ? `inset(${cy * 100}% ${cx * 100}%)` : '';
+      v.style.transform = `scale(${(p.zoom || 1) * k}) rotate(${p.rotate || 0}deg)`;
     }
     v.playbackRate = p.speed;
     v.loop = p.loop && !d.out;

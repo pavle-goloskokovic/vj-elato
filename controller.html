@@ -89,6 +89,7 @@
         <button data-cmd="restart">⟲</button>
         <label><input type="checkbox" data-param="loop" checked> loop</label>
         <label>fit <select data-param="fit"><option value="contain">contain</option><option value="cover">cover</option></select></label>
+        <button class="bars" title="Trim the black bars of a 4:3 picture inside a 16:9 file (12.5 % each side)">4:3 bars</button>
         <label class="blend-only">blend <select data-param="blend">
           <option>normal</option><option>screen</option><option>multiply</option><option>difference</option>
           <option>lighten</option><option>darken</option><option>overlay</option><option>hard-light</option>
@@ -104,6 +105,8 @@
         <label>brightness <input type="range" data-param="brightness" min="0" max="3" step="0.05" value="1"><output></output></label>
         <label>invert <input type="range" data-param="invert" min="0" max="1" step="0.01" value="0"><output></output></label>
         <label><span>blur <small>css</small></span> <input type="range" data-param="blur" min="0" max="30" step="0.5" value="0"><output></output></label>
+        <label>crop sides <input type="range" data-param="cropX" data-unit="%" min="0" max="0.3" step="0.005" value="0"><output></output></label>
+        <label>crop top/btm <input type="range" data-param="cropY" data-unit="%" min="0" max="0.3" step="0.005" value="0"><output></output></label>
         <label>zoom <input type="range" data-param="zoom" min="0.25" max="4" step="0.01" value="1"><output></output></label>
         <label>rotate <input type="range" data-param="rotate" min="-180" max="180" step="1" value="0"><output></output></label>
         <label><span>pixelate <small>gl</small></span> <input type="range" data-param="pixelate" min="0" max="1" step="0.01" value="0"><output></output></label>

@@ -28,13 +28,15 @@ uniform sampler2D tex;
 uniform vec2 texSize, outSize;
 uniform float fitCover, zoom, rotate, hue, saturate, contrast, brightness, invert;
 uniform float pixelate, rgbShift, posterize, threshold;
+uniform vec2 crop;          // fraction trimmed from each side (x) and top/bottom (y): 0.125 removes 4:3 pillarbox bars
 uniform int mirror, kaleido;
 
 const float PI = 3.14159265;
 
+// t is in picture space (0..1 over the cropped picture)
 vec4 sampleTex(vec2 t) {
   if (t.x < 0.0 || t.x > 1.0 || t.y < 0.0 || t.y > 1.0) return vec4(0.0);
-  return texture(tex, t);
+  return texture(tex, crop + t * (1.0 - 2.0 * crop));
 }
 vec3 hueRotate(vec3 c, float a) {
   const mat3 toYIQ = mat3(0.299, 0.596, 0.211, 0.587, -0.274, -0.523, 0.114, -0.322, 0.312);
@@ -46,7 +48,8 @@ vec3 hueRotate(vec3 c, float a) {
 }
 
 void main() {
-  float ca = outSize.x / outSize.y, ta = texSize.x / texSize.y;
+  float ca = outSize.x / outSize.y;
+  float ta = (texSize.x * (1.0 - 2.0 * crop.x)) / (texSize.y * (1.0 - 2.0 * crop.y));
   vec2 uv = vUv;
 
   vec2 d = (uv - 0.5) * vec2(ca, 1.0);
@@ -263,6 +266,7 @@ export function createRenderer(canvas) {
     gl.uniform1f(u.rgbShift, params.rgbShift || 0);
     gl.uniform1f(u.posterize, params.posterize || 0);
     gl.uniform1f(u.threshold, params.threshold || 0);
+    gl.uniform2f(u.crop, Math.min(0.45, params.cropX || 0), Math.min(0.45, params.cropY || 0));
     gl.uniform1i(u.mirror, params.mirror || 0);
     gl.uniform1i(u.kaleido, params.kaleido || 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);

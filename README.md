@@ -17,13 +17,21 @@ A two-tab browser VJ tool. One tab is the **player** (goes on the projector), th
 
 ## Effects
 
-Local clips are composited in WebGL2: per deck zoom, rotate, mirror, kaleidoscope, pixelate, RGB shift, posterize, threshold plus the colour controls, and on the master a feedback trail (decay, zoom, rotate, hue drift) and a strobe. The internal render size is adjustable (50/75/100 % of the window) for weaker GPUs.
+Local clips are composited in WebGL2: per deck crop (Destockd clips carry a 4:3 picture inside a 16:9 frame; the **4:3 bars** button trims it so cover and zoom work on the real picture), zoom, rotate, mirror, kaleidoscope, pixelate, RGB shift, posterize, threshold plus the colour controls, and on the master a feedback trail (decay, zoom, rotate, hue drift) and a strobe. The internal render size is adjustable (50/75/100 % of the window) for weaker GPUs.
 
 Streamed clips cannot be read by WebGL: neither Destockd's CDN nor archive.org's storage nodes send CORS headers on video, so a streamed deck is drawn as a plain `<video>` layer with CSS filters (hue, saturation, contrast, brightness, invert, blur, zoom, rotate, blend mode). The controller shows `webgl` or `css only` next to each deck. Put the clips you want to bend on the stick.
 
 Keys on the controller: `1`/`2` play-pause A/B, `←`/`→` crossfader, `B` blackout. On the player: `F` fullscreen, `H` hide the overlay, `B` blackout.
 
-Local files need `file://`-free hosting: both tabs must share an origin. Locally, run `python -m http.server` in this folder and open `http://localhost:8000/`.
+## Offline and portable
+
+`python tools/make_portable.py F:\` copies the tool to `F:j-elato\` on a stick. There, `serve.cmd` (Windows: Python if present, otherwise a pure PowerShell server) or `serve.sh` (macOS, Linux) serves it on `http://localhost:8765/` and opens the browser. Nothing is installed. Both tabs must share an origin, which is why a server is needed; plain `file://` pages cannot talk to each other.
+
+With the stick as clip folder everything local works without internet: clips, their thumbnails (the `.jpg` next to each clip, or a frame grabbed from the video and cached), effects, and collections. Only the Destockd and Spelunkr catalogs' hotlinked thumbnails and streams need a connection.
+
+## Stick collections
+
+The Stick tab's filter lists, besides every file: your own collections from `vj-elato-collections.json` on the stick (the ★ button on a card adds it to **Starred**; the file is plain JSON you can edit by hand), every top-level folder, and the Destockd collection tags carried by `destockd-index.json`. Picking the folder asks for write access so the ★ button can save; a read-only stick still works, the collection then lives only for the session.
 
 ## Catalog
 

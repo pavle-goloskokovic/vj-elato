@@ -1,6 +1,6 @@
 import { createBus } from './bus.js';
 import { loadCatalogs, destockdAll, destockdCollection, spelunkrAll, fmtBytes, fmtTime } from './catalog.js';
-import { supportsFolders, pickFolder, restoreFolder, requestAccess, scanFolder, getFile } from './library.js';
+import { supportsFolders, pickFolder, restoreFolder, requestAccess, scanFolder, getFile, localThumb, saveCollections, COLLECTIONS_FILE } from './library.js';
 import { Stage, DEFAULT_PARAMS, DEFAULT_MASTER } from './stage.js';
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -77,6 +77,7 @@ function showOutput(input) {
   const v = readInput(input);
   if (input.dataset.labels) { out.value = input.dataset.labels.split(',')[Math.round(parseFloat(input.value))] ?? String(v); return; }
   if (typeof v !== 'number') { out.value = ''; return; }
+  if (input.dataset.unit === '%') { out.value = (v * 100).toFixed(1).replace(/\.0$/, '') + '%'; return; }
   const step = parseFloat(input.step || '1');
   out.value = step >= 1 ? String(v) : step >= 0.1 ? v.toFixed(1) : v.toFixed(2);
 }
@@ -108,6 +109,11 @@ for (const name of ['A', 'B']) {
       setInput(input, DEFAULT_PARAMS[key]);
       setParam(name, key, DEFAULT_PARAMS[key]);
     }
+  });
+  $('.bars', el).addEventListener('click', () => {
+    const input = $('[data-param=cropX]', el);
+    const v = state.decks[name].params.cropX ? 0 : 0.125;
+    setInput(input, v); setParam(name, 'cropX', v);
   });
   const scrub = $('.scrub', el);
   scrub.addEventListener('input', () => {
@@ -150,7 +156,7 @@ function syncInputs() {
     preview.setParams(name, state.decks[name].params);
     const d = state.decks[name];
     $('.title', deckEls[name]).textContent = d.clip ? d.clip.title : 'empty';
-    $('img', paneEls[name]).src = d.clip && d.clip.thumb ? d.clip.thumb : '';
+    setPaneThumb(name, d.clip);
   }
   for (const input of $$('[data-master]')) setInput(input, state.master[input.dataset.master]);
   const { scale, ...rest } = state.master; preview.setMaster(rest);
@@ -274,7 +280,7 @@ function sendSync() {
   state.playerHasState = true;
   state.playerNeedsSync = ['A', 'B'].some((n) => state.decks[n].clip && !state.decks[n].source);
 }
-const clipMeta = (c) => ({ key: c.key, title: c.title, thumb: c.thumb || '', url: c.url || null, localPath: c.local ? c.local.path : (c.localPath || null), in: c.in || 0, out: c.out || null, source: c.source });
+const clipMeta = (c) => ({ key: c.key, title: c.title, thumb: c.thumb && !c.thumb.startsWith('blob:') ? c.thumb : '', url: c.url || null, localPath: c.local ? c.local.path : (c.localPath || null), in: c.in || 0, out: c.out || null, source: c.source });
 const clipFromMeta = (m) => ({ key: m.key, title: m.title, thumb: m.thumb, url: m.url, localPath: m.localPath, in: m.in, out: m.out, source: m.source });
 
 $('#open-player').addEventListener('click', () => window.open('player.html', 'vj-elato-player'));
@@ -300,7 +306,7 @@ async function loadClip(name, clip) {
   bus.send('load', { deck: name, source, meta: clipMeta(clip) });
   if (state.live) preview.load(name, source, clipMeta(clip));
   $('.title', deckEls[name]).textContent = clip.title;
-  $('img', paneEls[name]).src = clip.thumb || '';
+  setPaneThumb(name, clip);
   const badge = $('.badge', paneEls[name]);
   badge.textContent = source.kind === 'file' ? 'stick' : 'stream'; badge.className = 'badge';
   persist();
@@ -324,6 +330,7 @@ async function loadPreviews(syncPlayer) {
     }
     if (d.source && state.live) preview.load(name, d.source, { ...clipMeta(d.clip), time: d.lastTime || 0, paused: !d.playing });
     $('.badge', paneEls[name]).textContent = d.source.kind === 'file' ? 'stick' : 'stream';
+    setPaneThumb(name, d.clip);
   }
   if (syncPlayer && changed && state.playerNeedsSync) sendSync();
   updateFolderHint();
@@ -369,6 +376,13 @@ function fillFilter() {
   } else if (state.tab === 'spelunkr' && state.catalogs) {
     add('all', 'All channels');
     for (const c of state.catalogs.spelunkr.channels) add('ch:' + c.id, `${c.emoji} ${c.name} (${c.items.length})`);
+  } else if (state.tab === 'stick' && state.library) {
+    const lib = state.library;
+    add('all', `All files (${lib.files.length})`);
+    for (const [name, paths] of Object.entries(lib.own)) add('own:' + name, `★ ${name} (${paths.length})`);
+    if (!lib.own.Starred) add('own:Starred', '★ Starred (0)');
+    for (const [name, paths] of lib.folders) add('folder:' + name, `📁 ${name} (${paths.length})`);
+    for (const [name, paths] of lib.collections) add('tag:' + name, `Destockd · ${name} (${paths.length})`);
   } else if (state.tab === 'stick') {
     add('all', 'All files');
   }
@@ -401,8 +415,14 @@ function currentClips() {
       if (!terms.length || match(`${c.title} ${c.year || ''} ${c.channelName}`.toLowerCase())) { out.push(c); if (out.length >= 600) break; }
     }
   } else if (state.tab === 'stick' && state.library) {
-    for (const file of state.library.files) {
-      if (!terms.length || match(file.path.toLowerCase())) out.push(localClip(file));
+    const lib = state.library;
+    let paths = null;
+    if (f && f.startsWith('own:')) paths = lib.own[f.slice(4)] || [];
+    else if (f && f.startsWith('folder:')) paths = lib.folders.get(f.slice(7)) || [];
+    else if (f && f.startsWith('tag:')) paths = lib.collections.get(f.slice(4)) || [];
+    const files = paths ? paths.map((p) => lib.byPath.get(p)).filter(Boolean) : lib.files;
+    for (const file of files) {
+      if (!terms.length || match(`${file.path} ${(file.tags || []).join(' ')}`.toLowerCase())) out.push(localClip(file));
       if (out.length >= 600) break;
     }
   }
@@ -415,12 +435,47 @@ function* localDestockd() {
   for (const c of byUrl.values()) yield c;
 }
 function localClip(file) {
-  const idx = state.library.index && Object.values(state.library.index.clips).find((r) => r.path === file.path);
   return {
-    key: 'local:' + file.path, source: 'stick', title: file.path, local: file, localPath: file.path,
-    thumb: idx ? `${state.catalogs.destockd.keyframeBase}${encodeURIComponent(idx.film)}/${idx.shot}.jpg` : '',
-    sub: idx ? idx.collections.join(', ') : '',
+    key: 'local:' + file.path, source: 'stick', title: file.film ? `${file.film} · ${file.shot}` : file.path, local: file, localPath: file.path,
+    thumb: '',          // resolved from the stick by thumbFor()
+    sub: file.tags && file.tags.length ? file.tags.join(', ') : (file.folder || ''),
   };
+}
+
+// The local file entry behind a clip, if the stick has it.
+function localEntry(c) {
+  if (c.local) return c.local;
+  const lib = state.library;
+  if (!lib) return null;
+  return (c.url && lib.byUrl.get(c.url)) || (c.localPath && lib.byPath.get(c.localPath)) || null;
+}
+// Thumbnail URL for a clip: from the stick when the clip is there (works
+// offline), else the catalog's hotlinked image.
+async function thumbFor(c) {
+  const e = localEntry(c);
+  if (e) { try { const u = await localThumb(state.library, e); if (u) return u; } catch { /* fall through */ } }
+  return c.thumb && !c.thumb.startsWith('blob:') ? c.thumb : '';
+}
+function setPaneThumb(name, c) {
+  const img = $('img', paneEls[name]);
+  img.src = '';
+  if (c) thumbFor(c).then((u) => { if (state.decks[name].clip === c) img.src = u; });
+}
+
+// ---------- own collections on the stick (vj-elato-collections.json) ----------
+function inOwn(name, path) { return !!(state.library && state.library.own[name] && state.library.own[name].includes(path)); }
+async function toggleOwn(name, path) {
+  const lib = state.library;
+  if (!lib) return;
+  const list = lib.own[name] || (lib.own[name] = []);
+  const i = list.indexOf(path);
+  if (i >= 0) list.splice(i, 1); else list.push(path);
+  try {
+    await saveCollections(lib.handle, lib.own);
+  } catch (e) {
+    if (!state.warnedWrite) { state.warnedWrite = true; alert(`Could not write ${COLLECTIONS_FILE} on the stick (${e.message}). Reconnect the folder and allow editing, or the collection is kept only for this session.`); }
+  }
+  fillFilter();
 }
 
 function render() {
@@ -439,21 +494,33 @@ function render() {
 function card(c) {
   const el = document.createElement('div');
   el.className = 'card';
-  const isLocal = !!(c.local || (state.library && c.url && state.library.byUrl.has(c.url)));
+  const local = localEntry(c);
   const sub = c.source === 'spelunkr'
     ? `${c.channelName}${c.year ? ' · ' + c.year : ''} · ${fmtTime(c.duration)}${c.bytes ? ' · ' + fmtBytes(c.bytes) : ''}`
     : c.source === 'destockd' ? `${c.shot}${c.bytes ? ' · ' + fmtBytes(c.bytes) : ''}` : (c.sub || '');
+  const starred = local && inOwn('Starred', local.path);
   el.innerHTML = `
-    <img loading="lazy" src="${c.thumb || ''}" alt="">
-    ${isLocal ? '<span class="local">stick</span>' : ''}
-    <div class="actions"><button data-deck="A">A</button><button data-deck="B">B</button></div>
+    <img loading="lazy" src="${local ? '' : (c.thumb || '')}" alt="">
+    ${local ? '<span class="local">stick</span>' : ''}
+    <div class="actions">${local ? `<button class="star${starred ? ' on' : ''}" title="Starred collection on the stick">★</button>` : ''}<button data-deck="A">A</button><button data-deck="B">B</button></div>
     <div class="meta"><div class="name">${escapeHtml(c.source === 'destockd' ? c.film : c.title)}</div><div class="sub">${escapeHtml(sub)}</div></div>`;
-  el.addEventListener('click', (e) => {
+  if (local) {
+    const img = $('img', el);
+    // stick thumbnails are loaded when the card scrolls into view
+    thumbObserver.observe(img);
+    img._load = () => thumbFor(c).then((u) => { if (u) img.src = u; });
+  }
+  el.addEventListener('click', async (e) => {
+    const star = e.target.closest('button.star');
+    if (star) { await toggleOwn('Starred', local.path); star.classList.toggle('on', inOwn('Starred', local.path)); return; }
     const b = e.target.closest('button[data-deck]');
     loadClip(b ? b.dataset.deck : $('#target-deck').value, c);
   });
   return el;
 }
+const thumbObserver = new IntersectionObserver((entries) => {
+  for (const en of entries) if (en.isIntersecting && en.target._load) { thumbObserver.unobserve(en.target); en.target._load(); en.target._load = null; }
+}, { root: results, rootMargin: '300px' });
 
 $('#url-load').addEventListener('click', () => {
   const url = $('#url-input').value.trim();
@@ -472,8 +539,8 @@ $('#pick-folder').addEventListener('click', async () => {
 async function useFolder(handle) {
   folderStatus.textContent = 'scanning…';
   const lib = await scanFolder(handle);
-  state.library = { ...lib, handle, byPath: new Map(lib.files.map((f) => [f.path, f])) };
-  folderStatus.textContent = `${lib.name}: ${lib.files.length} files${lib.byUrl.size ? `, ${lib.byUrl.size} matched to Destockd` : ''}`;
+  state.library = { ...lib, handle };
+  folderStatus.textContent = `${lib.name}: ${lib.files.length} clips${lib.byUrl.size ? `, ${lib.byUrl.size} Destockd` : ''}, ${lib.thumbs.size} thumbs${lib.writable ? '' : ', read-only'}`;
   fillFilter(); render();
   await loadPreviews(true);     // clips waiting on the stick can now be resolved
 }

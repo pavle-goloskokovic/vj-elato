@@ -48,6 +48,8 @@ section { min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 .card .actions { position: absolute; top: 5px; right: 5px; display: none; gap: 3px; }
 .card:hover .actions { display: flex; }
 .card .actions button { padding: 1px 6px; font-size: 11px; font-weight: 700; }
+.card .actions button.star { color: #777; }
+.card .actions button.star.on { color: var(--accent); }
 .card .actions button[data-deck=A] { color: var(--a); }
 .card .actions button[data-deck=B] { color: var(--b); }
 #results .notice { grid-column: 1 / -1; color: var(--muted); padding: 20px; text-align: center; }
