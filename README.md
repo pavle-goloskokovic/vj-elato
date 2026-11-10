@@ -15,6 +15,12 @@ A two-tab browser VJ tool. One tab is the **player** (goes on the projector), th
 2. Open `controller.html` in another tab of the same browser.
 3. Browse, click a clip to load it into deck A or B, mix with the crossfader, blend modes and filters.
 
+## Effects
+
+Local clips are composited in WebGL2: per deck zoom, rotate, mirror, kaleidoscope, pixelate, RGB shift, posterize, threshold plus the colour controls, and on the master a feedback trail (decay, zoom, rotate, hue drift) and a strobe. The internal render size is adjustable (50/75/100 % of the window) for weaker GPUs.
+
+Streamed clips cannot be read by WebGL: neither Destockd's CDN nor archive.org's storage nodes send CORS headers on video, so a streamed deck is drawn as a plain `<video>` layer with CSS filters (hue, saturation, contrast, brightness, invert, blur, zoom, rotate, blend mode). The controller shows `webgl` or `css only` next to each deck. Put the clips you want to bend on the stick.
+
 Keys on the controller: `1`/`2` play-pause A/B, `←`/`→` crossfader, `B` blackout. On the player: `F` fullscreen, `H` hide the overlay, `B` blackout.
 
 Local files need `file://`-free hosting: both tabs must share an origin. Locally, run `python -m http.server` in this folder and open `http://localhost:8000/`.
@@ -27,7 +33,7 @@ The footage is public domain, hosted by the Internet Archive and indexed by two 
 
 ## Roadmap
 
-- WebGL compositing with shader effects (feedback, kaleidoscope, chroma key)
+- Chroma key, LFO modulation of parameters
 - Cue points, beat-synced clip switching, playlists
 - MIDI input (Web MIDI)
 - Remote controller over WebRTC for a phone or second laptop

@@ -9,6 +9,7 @@ body.show-cursor { cursor: default; }
 }
 #stage video.cover { object-fit: cover; }
 #deckB { mix-blend-mode: normal; }
+#gl { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
 #black { position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none; transition: opacity 80ms linear; }
 
 #overlay {

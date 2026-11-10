@@ -34,7 +34,7 @@ section { min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 #url-panel input { flex: 1; min-width: 200px; }
 #url-panel p { width: 100%; margin: 0; }
 
-#results { flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; padding: 10px; align-content: start; }
+#results { flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; padding: 10px; align-content: start; align-items: start; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; cursor: pointer; position: relative; }
 .card:hover { border-color: var(--accent); }
 .card img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #000; }
@@ -56,8 +56,9 @@ section { min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 .deck[data-deck=B] { border-top: 3px solid var(--b); }
 .deck-head { display: flex; align-items: baseline; gap: 8px; }
 .deck-name { font-weight: 800; font-size: 16px; }
-.deck[data-deck=A] .deck-name, .master .deck-name:first-child { color: var(--a); }
-.deck[data-deck=B] .deck-name, .master .deck-name:last-of-type { color: var(--b); }
+.deck[data-deck=A] .deck-name, .deck-name.a { color: var(--a); }
+.deck[data-deck=B] .deck-name, .deck-name.b { color: var(--b); }
+.deck .mode { font-size: 11px; white-space: nowrap; }
 .deck .title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 .deck .preview { position: relative; background: #000; border-radius: 6px; overflow: hidden; aspect-ratio: 16/9; max-height: 110px; }
 .deck .preview img { width: 100%; height: 100%; object-fit: contain; display: block; }
@@ -68,12 +69,15 @@ section { min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 .deck .scrub { width: 100%; }
 .transport { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .params { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 3px 10px; }
-.params label { display: grid; grid-template-columns: 62px 1fr 38px; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.params label { display: grid; grid-template-columns: 66px 1fr 38px; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.params label small { grid-column: 1; grid-row: 1; justify-self: end; margin-right: -4px; font-size: 8px; color: #666; align-self: start; }
 .params output { text-align: right; font-variant-numeric: tabular-nums; font-size: 11px; }
-.params select { grid-column: 2 / 4; }
+.params select { grid-column: 2 / 4; padding: 2px 6px; }
 .params .reset { grid-column: 1 / -1; justify-self: start; font-size: 11px; padding: 2px 8px; margin-top: 4px; }
-.master { display: flex; align-items: center; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
-.master input { flex: 1; height: 28px; }
+.master { display: flex; flex-direction: column; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+.master .xfade { display: flex; align-items: center; gap: 12px; }
+.master .xfade input { flex: 1; height: 28px; }
+.master-params { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 
 @media (max-width: 900px) {
   main { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
