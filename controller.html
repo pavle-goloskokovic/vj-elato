@@ -45,6 +45,15 @@
     </section>
 
     <section id="mixer">
+      <div class="preview-strip" id="preview-strip">
+        <div class="pane" data-pane="A"><img alt=""><span class="label">A</span><span class="badge"></span></div>
+        <div class="pane" data-pane="out"><span class="label">OUT</span></div>
+        <div class="pane" data-pane="B"><img alt=""><span class="label">B</span><span class="badge"></span></div>
+        <video id="pvA" muted playsinline></video>
+        <canvas id="preview-gl"></canvas>
+        <video id="pvB" muted playsinline></video>
+        <label class="live" title="Decode the clips here too, so the previews show the effects live. Off saves CPU."><input type="checkbox" id="live-preview" checked> live preview</label>
+      </div>
       <div class="decks" id="decks"></div>
 
       <div class="master">
@@ -70,7 +79,6 @@
   <template id="deck-template">
     <div class="deck">
       <div class="deck-head"><span class="deck-name"></span><span class="title">empty</span><span class="mode muted"></span></div>
-      <div class="preview"><img alt=""><span class="badge"></span></div>
       <div class="time"><span class="t">0:00</span> / <span class="d">–:––</span></div>
       <input type="range" class="scrub" min="0" max="1000" value="0">
       <div class="transport">

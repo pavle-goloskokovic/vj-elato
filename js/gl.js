@@ -1,19 +1,22 @@
-// WebGL2 compositor for the player. Each deck's video is sampled as a texture,
-// run through a per-deck effect shader into its own framebuffer, then the two
-// decks are mixed (crossfade + blend mode) with a feedback trail from the
-// previous frame, and finally blitted to the canvas with strobe applied.
+// WebGL2 compositor shared by the player and the controller previews.
+//
+// Each deck's video is sampled as a texture and run through a per-deck effect
+// shader into its own framebuffer. The two decks are then mixed (crossfade +
+// blend mode) with a feedback trail from the previous frame into a ping-pong
+// framebuffer, and finally blitted to one or more panes of the canvas with
+// strobe applied. The player uses one full-window pane; the controller shows
+// deck A, the output and deck B side by side at a small size.
 //
 // Only decks whose video can be read by WebGL are drawn here: local files
-// (blob: URLs) and hosts that send CORS headers, such as archive.org. A video
-// from a host without CORS taints WebGL, so the player keeps such a deck as a
-// plain <video> layer with CSS filters instead.
+// (blob: URLs) and same-origin files. Neither Destockd's CDN nor archive.org's
+// storage nodes send CORS headers on video, so streams taint WebGL and the
+// stage keeps such a deck as a plain <video> layer with CSS filters instead.
 
 const VERT = `#version 300 es
 precision highp float;
 out vec2 vUv;
 void main() {
-  // one big triangle covering the viewport
-  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);   // one triangle covering the viewport
   vUv = p;
   gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
 }`;
@@ -46,7 +49,6 @@ void main() {
   float ca = outSize.x / outSize.y, ta = texSize.x / texSize.y;
   vec2 uv = vUv;
 
-  // geometry, in canvas space centred on 0
   vec2 d = (uv - 0.5) * vec2(ca, 1.0);
   if (kaleido >= 2) {
     float seg = 2.0 * PI / float(kaleido);
@@ -65,7 +67,6 @@ void main() {
     uv = (floor(uv * cells) + 0.5) / cells;
   }
 
-  // aspect fit: contain letterboxes, cover crops
   vec2 s = vec2(1.0);
   if ((ca > ta) != (fitCover > 0.5)) s.x = ca / ta; else s.y = ta / ca;
   vec2 t = (uv - 0.5) * s + 0.5;
@@ -119,8 +120,7 @@ vec3 hueRotate(vec3 c, float a) {
 void main() {
   vec4 a = texture(texA, vUv); a.a *= wA;
   vec4 b = texture(texB, vUv); b.a *= wB;
-  // B over A, with the blend mode where both are present; premultiplied result
-  vec3 col = a.rgb * a.a * (1.0 - b.a) + mix(b.rgb, blendFn(a.rgb, b.rgb), a.a) * b.a;
+  vec3 col = a.rgb * a.a * (1.0 - b.a) + mix(b.rgb, blendFn(a.rgb, b.rgb), a.a) * b.a;   // premultiplied
   float al = a.a + b.a * (1.0 - a.a);
 
   if (feedback > 0.0) {
@@ -141,8 +141,12 @@ const OUT_FRAG = `#version 300 es
 precision highp float;
 in vec2 vUv; out vec4 o;
 uniform sampler2D tex;
-uniform float gain;
-void main() { o = texture(tex, vUv) * gain; }`;
+uniform float gain, premultiply;
+void main() {
+  vec4 c = texture(tex, vUv);
+  if (premultiply > 0.5) c.rgb *= c.a;
+  o = c * gain;
+}`;
 
 export const BLEND_INDEX = {
   normal: 0, screen: 1, multiply: 2, difference: 3, lighten: 4, darken: 5,
@@ -194,20 +198,24 @@ export function createRenderer(canvas) {
 
   const videoTex = { A: texture(), B: texture() };
   const videoSize = { A: [16, 9], B: [16, 9] };
-  const empty = texture();
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 0]));
 
   let W = 0, H = 0, deckFbo = null, ping = null, pingIndex = 0;
+  // Internal render size (the framebuffers). The canvas itself may be larger
+  // or smaller; panes are scaled on blit.
   function resize(w, h) {
     w = Math.max(2, Math.round(w)); h = Math.max(2, Math.round(h));
     if (w === W && h === H) return;
-    W = w; H = h; canvas.width = w; canvas.height = h;
+    W = w; H = h;
     deckFbo = { A: target(w, h), B: target(w, h) };
     ping = [target(w, h), target(w, h)];
   }
+  function setCanvasSize(w, h) {
+    w = Math.max(2, Math.round(w)); h = Math.max(2, Math.round(h));
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+  }
 
-  // Returns false when the video cannot be used (CORS taint); the caller then
-  // falls back to the CSS layer for that deck.
+  // Returns false when the video cannot be read (CORS taint).
   function upload(name, video) {
     gl.bindTexture(gl.TEXTURE_2D, videoTex[name]);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
@@ -250,11 +258,23 @@ export function createRenderer(canvas) {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
-  // decks: { A: { params, active }, B: ... }  master: { crossfade, feedback, fbZoom, fbRotate, fbHue, strobe }
-  function render(decks, master, time) {
+  function blit(tex, pane, gain, premultiply) {
+    const [x, y, w, h] = pane;
+    gl.viewport(x, canvas.height - y - h, w, h);
+    gl.scissor(x, canvas.height - y - h, w, h);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, tex); gl.uniform1i(outProg.u.tex, 0);
+    gl.uniform1f(outProg.u.gain, gain);
+    gl.uniform1f(outProg.u.premultiply, premultiply ? 1 : 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  // decks: { A: { params, active }, B }   master: { crossfade, feedback, fbZoom, fbRotate, fbHue, strobe }
+  // panes: { out: [x, y, w, h], A?: [...], B?: [...] } in canvas pixels, y from the top
+  function render(decks, master, time, panes) {
     if (!deckFbo) return;
     gl.bindVertexArray(vao);
     gl.disable(gl.BLEND);
+    gl.disable(gl.SCISSOR_TEST);
     drawDeck('A', decks.A.params, decks.A.active);
     drawDeck('B', decks.B.params, decks.B.active);
 
@@ -281,24 +301,29 @@ export function createRenderer(canvas) {
     pingIndex = 1 - pingIndex;
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, W, H);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.enable(gl.SCISSOR_TEST);
     gl.useProgram(outProg.p);
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, next.t); gl.uniform1i(outProg.u.tex, 0);
     const strobe = master.strobe || 0;
     const gain = strobe > 0 ? ((time * strobe) % 1 < 0.5 ? 1 : 0) : 1;
-    gl.uniform1f(outProg.u.gain, gain);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if (panes.out) blit(next.t, panes.out, gain, false);
+    if (panes.A) blit(deckFbo.A.t, panes.A, 1, true);
+    if (panes.B) blit(deckFbo.B.t, panes.B, 1, true);
+    gl.disable(gl.SCISSOR_TEST);
   }
 
   function clear() {
+    gl.disable(gl.SCISSOR_TEST);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
     if (ping) for (const t of ping) { gl.bindFramebuffer(gl.FRAMEBUFFER, t.fb); gl.clear(gl.COLOR_BUFFER_BIT); }
   }
 
-  const renderer = gl.getExtension('WEBGL_debug_renderer_info');
+  const dbg = gl.getExtension('WEBGL_debug_renderer_info');
   return {
-    gl, resize, upload, render, clear,
-    info: renderer ? gl.getParameter(renderer.UNMASKED_RENDERER_WEBGL) : 'webgl2',
+    gl, resize, setCanvasSize, upload, render, clear,
+    info: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'webgl2',
   };
 }

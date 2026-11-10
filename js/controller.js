@@ -1,33 +1,50 @@
 import { createBus } from './bus.js';
 import { loadCatalogs, destockdAll, destockdCollection, spelunkrAll, fmtBytes, fmtTime } from './catalog.js';
 import { supportsFolders, pickFolder, restoreFolder, requestAccess, scanFolder, getFile } from './library.js';
+import { Stage, DEFAULT_PARAMS, DEFAULT_MASTER } from './stage.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const bus = createBus('controller');
-
-// Must match DEFAULT_PARAMS / DEFAULT_MASTER in player.js
-const DEFAULT_PARAMS = {
-  opacity: 1, speed: 1, loop: true, fit: 'contain', blend: 'normal',
-  hue: 0, saturate: 1, contrast: 1, brightness: 1, invert: 0, blur: 0,
-  zoom: 1, rotate: 0, pixelate: 0, rgbShift: 0, posterize: 0, threshold: 0, mirror: 0, kaleido: 0,
-};
-const DEFAULT_MASTER = {
-  crossfade: 0, blackout: false, feedback: 0, fbZoom: 1, fbRotate: 0, fbHue: 0, strobe: 0, scale: 0.75,
-};
 const KEEP_ON_RESET = new Set(['loop', 'fit', 'blend', 'opacity', 'speed', 'crossfade', 'blackout', 'scale']);
+const STORE_KEY = 'vj-elato-controller';
 
 const state = {
   decks: {
-    A: { clip: null, source: null, params: { ...DEFAULT_PARAMS }, playing: false },
-    B: { clip: null, source: null, params: { ...DEFAULT_PARAMS }, playing: false },
+    A: { clip: null, source: null, params: { ...DEFAULT_PARAMS }, playing: false, duration: 0 },
+    B: { clip: null, source: null, params: { ...DEFAULT_PARAMS }, playing: false, duration: 0 },
   },
   master: { ...DEFAULT_MASTER },
+  live: true,
   catalogs: null,
-  library: null,          // { name, index, byUrl, files, handle }
+  library: null,          // { name, index, byUrl, byPath, files, handle }
   tab: 'destockd',
   lastStatus: 0,
+  playerHasState: false,  // true once a live player has told us what it holds
+  playerNeedsSync: false, // we synced a player while some clip's file was not yet reachable
 };
+
+// ---------- live preview stage ----------
+const strip = $('#preview-strip');
+const paneEls = { A: $('.pane[data-pane=A]', strip), out: $('.pane[data-pane=out]', strip), B: $('.pane[data-pane=B]', strip) };
+const preview = new Stage({
+  videos: { A: $('#pvA'), B: $('#pvB') },
+  canvas: $('#preview-gl'),
+  layout: () => {
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const sr = strip.getBoundingClientRect();
+    const rect = (el) => { const r = el.getBoundingClientRect(); return [Math.round((r.left - sr.left) * dpr), Math.round((r.top - sr.top) * dpr), Math.round(r.width * dpr), Math.round(r.height * dpr)]; };
+    const out = rect(paneEls.out);
+    // CSS-mode videos sit exactly over the output pane
+    for (const v of [$('#pvA'), $('#pvB')]) {
+      const r = paneEls.out.getBoundingClientRect();
+      Object.assign(v.style, { left: (r.left - sr.left) + 'px', top: (r.top - sr.top) + 'px', width: r.width + 'px', height: r.height + 'px' });
+    }
+    return { canvas: [Math.round(sr.width * dpr), Math.round(sr.height * dpr)], fbo: [Math.max(out[2], 320), Math.max(out[3], 180)], panes: { out, A: rect(paneEls.A), B: rect(paneEls.B) } };
+  },
+});
+new ResizeObserver(() => preview.relayout()).observe(strip);
+$('#live-preview').addEventListener('change', (e) => { state.live = e.target.checked; preview.setEnabled(state.live); persist(); });
 
 // ---------- deck UI from template ----------
 const deckEls = {};
@@ -41,7 +58,6 @@ for (const name of ['A', 'B']) {
   deckEls[name] = el;
 }
 
-// Generic parameter binding: inputs with data-param (deck) or data-master.
 function readInput(input) {
   if (input.type === 'checkbox') return input.checked;
   if (input.tagName === 'SELECT') return isNaN(Number(input.value)) ? input.value : Number(input.value);
@@ -72,12 +88,7 @@ function setInput(input, value) {
 for (const name of ['A', 'B']) {
   const el = deckEls[name];
   bindInputs(el, 'data-param', (key, value) => setParam(name, key, value));
-  for (const btn of $$('[data-cmd]', el)) {
-    btn.addEventListener('click', () => {
-      bus.send(btn.dataset.cmd, { deck: name });
-      state.decks[name].playing = btn.dataset.cmd !== 'pause';
-    });
-  }
+  for (const btn of $$('[data-cmd]', el)) btn.addEventListener('click', () => command(btn.dataset.cmd, name));
   $('.reset', el).addEventListener('click', () => {
     for (const input of $$('[data-param]', el)) {
       const key = input.dataset.param;
@@ -89,19 +100,28 @@ for (const name of ['A', 'B']) {
   const scrub = $('.scrub', el);
   scrub.addEventListener('input', () => {
     const dur = state.decks[name].duration;
-    if (dur) bus.send('seek', { deck: name, time: (scrub.value / 1000) * dur });
+    if (dur) { const t = (scrub.value / 1000) * dur; bus.send('seek', { deck: name, time: t }); preview.seek(name, t); }
   });
+}
+function command(cmd, name) {
+  bus.send(cmd, { deck: name });
+  if (cmd === 'play') preview.play(name); else if (cmd === 'pause') preview.pause(name); else if (cmd === 'restart') preview.restart(name);
+  state.decks[name].playing = cmd !== 'pause';
+  persist();
 }
 function setParam(name, key, value) {
   state.decks[name].params[key] = value;
   bus.send('deck', { deck: name, params: { [key]: value } });
+  preview.setParams(name, { [key]: value });
+  persist();
 }
-
-bindInputs(document, 'data-master', (key, value) => setMaster(key, value));
 function setMaster(key, value) {
   state.master[key] = value;
   bus.send('master', { params: { [key]: value } });
+  if (key !== 'scale') preview.setMaster({ [key]: value });   // the preview keeps its own small render size
+  persist();
 }
+bindInputs(document, 'data-master', setMaster);
 $('#master-reset').addEventListener('click', () => {
   for (const input of $$('.master-params [data-master]')) {
     const key = input.dataset.master;
@@ -111,78 +131,155 @@ $('#master-reset').addEventListener('click', () => {
   }
 });
 
+// Push the whole state object into the inputs (after a restore).
+function syncInputs() {
+  for (const name of ['A', 'B']) {
+    for (const input of $$('[data-param]', deckEls[name])) setInput(input, state.decks[name].params[input.dataset.param]);
+    preview.setParams(name, state.decks[name].params);
+    const d = state.decks[name];
+    $('.title', deckEls[name]).textContent = d.clip ? d.clip.title : 'empty';
+    $('img', paneEls[name]).src = d.clip && d.clip.thumb ? d.clip.thumb : '';
+  }
+  for (const input of $$('[data-master]')) setInput(input, state.master[input.dataset.master]);
+  const { scale, ...rest } = state.master; preview.setMaster(rest);
+  $('#live-preview').checked = state.live; preview.setEnabled(state.live);
+}
+
+// ---------- persistence (survives a controller reload) ----------
+const serializeClip = (c) => c && { ...c, local: undefined, localPath: c.local ? c.local.path : c.localPath };
+let persistTimer;
+function persist() {
+  clearTimeout(persistTimer);
+  persistTimer = setTimeout(() => {
+    const decks = {};
+    for (const name of ['A', 'B']) {
+      const d = state.decks[name];
+      decks[name] = { clip: serializeClip(d.clip), params: d.params, playing: d.playing };
+    }
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ decks, master: state.master, live: state.live })); } catch { /* storage blocked */ }
+  }, 300);
+}
+function loadPersisted() {
+  try { return JSON.parse(localStorage.getItem(STORE_KEY) || 'null'); } catch { return null; }
+}
+
 // ---------- player link ----------
 const playerPill = $('#player-status'), gpuStatus = $('#gpu-status');
 bus.on('hello', () => sendSync());
-bus.on('status', (m) => {
-  state.lastStatus = Date.now();
-  for (const name of ['A', 'B']) updateDeckStatus(name, m.decks[name]);
-  gpuStatus.textContent = m.gpu ? `${m.fps || 0} fps · ${m.gpu.replace(/^ANGLE \((.*)\)$/, '$1').split(',').slice(0, 2).join(',').slice(0, 48)}` : 'no WebGL';
-});
-// The controller pings and the player answers with its status. Message handlers are not
-// throttled in background tabs the way timers are, so this stays live even if the
-// player tab is hidden.
-setInterval(() => bus.send('ping'), 500);
+bus.on('status', onStatus);
+bus.on('state', (m) => { adoptPlayerState(m); onStatus(m); });
+setInterval(() => bus.send('ping'), 500);   // message handlers are not throttled in hidden tabs; timers are
 setInterval(() => {
   const on = Date.now() - state.lastStatus < 2000;
   playerPill.textContent = on ? 'player connected' : 'no player';
   playerPill.className = 'pill ' + (on ? 'on' : 'off');
-  if (!on) gpuStatus.textContent = '';
+  if (!on) { gpuStatus.textContent = ''; state.playerHasState = false; }
 }, 500);
 
-function sendSync() {
-  const decks = {};
-  for (const name of ['A', 'B']) {
-    const d = state.decks[name];
-    decks[name] = { params: d.params, source: d.source, meta: d.clip ? clipMeta(d.clip) : null, playing: d.playing };
-  }
-  bus.send('sync', { decks, master: state.master });
-}
-const clipMeta = (c) => ({ title: c.title, in: c.in || 0, out: c.out || null, key: c.key });
-
-$('#open-player').addEventListener('click', () => window.open('player.html', 'vj-elato-player'));
-
-// ---------- loading clips ----------
-async function loadClip(name, clip) {
-  const d = state.decks[name];
-  let source;
-  const local = clip.local || (state.library && clip.url && state.library.byUrl.get(clip.url));
-  if (local) {
-    try {
-      source = { kind: 'file', file: await getFile(local) };
-    } catch (e) {
-      console.warn('local file failed, falling back to URL', e);
-    }
-  }
-  if (!source) {
-    if (!clip.url) { alert('This clip is not available on the stick and has no URL.'); return; }
-    source = { kind: 'url', url: clip.url };
-  }
-  d.clip = clip; d.source = source; d.playing = true; d.duration = 0;
-  bus.send('load', { deck: name, source, meta: clipMeta(clip) });
-  const el = deckEls[name];
-  $('.title', el).textContent = clip.title;
-  $('.preview img', el).src = clip.thumb || '';
-  $('.badge', el).textContent = source.kind === 'file' ? 'stick' : 'stream';
-  $('.badge', el).className = 'badge';
+function onStatus(m) {
+  state.lastStatus = Date.now();
+  for (const name of ['A', 'B']) updateDeckStatus(name, m.decks[name]);
+  gpuStatus.textContent = m.gpu ? `${m.fps || 0} fps · ${m.gpu.replace(/^ANGLE \((.*)\)$/, '$1').split(',').slice(0, 2).join(',').slice(0, 48)}` : 'no WebGL';
 }
 
 function updateDeckStatus(name, s) {
   if (!s) return;
   const el = deckEls[name], d = state.decks[name];
   d.duration = s.duration || 0;
+  d.lastTime = s.time || 0;          // used to resume a reloaded player where it was
   $('.t', el).textContent = fmtTime(s.time);
   $('.d', el).textContent = fmtTime(s.duration);
   const scrub = $('.scrub', el);
   if (!scrub.matches(':active') && s.duration) scrub.value = Math.round((s.time / s.duration) * 1000);
-  const badge = $('.badge', el);
+  const badge = $('.badge', paneEls[name]);
   if (s.error) { badge.textContent = s.error; badge.className = 'badge error'; }
   else if (d.clip) {
     badge.className = 'badge';
-    badge.textContent = (d.source.kind === 'file' ? 'stick' : 'stream') + (s.paused ? ' · paused' : s.ready ? '' : ' · buffering');
-  }
+    badge.textContent = (d.source && d.source.kind === 'file' ? 'stick' : 'stream') + (s.paused ? ' · paused' : s.ready ? '' : ' · buffering');
+  } else badge.textContent = '';
   $('.mode', el).textContent = d.clip ? (s.mode === 'gl' ? 'webgl' : 'css only') : '';
   $('.mode', el).title = s.mode === 'gl' ? 'All effects available' : 'This source does not allow WebGL to read it (no CORS). Only the basic filters apply.';
+  // keep the preview in step with the player
+  const pv = preview.videos[name];
+  if (state.live && d.clip && pv.readyState >= 1 && s.ready) {
+    if (Math.abs(pv.currentTime - s.time) > 0.6) pv.currentTime = s.time;
+    if (s.paused && !pv.paused) pv.pause();
+    if (!s.paused && pv.paused && !pv.ended) preview.play(name);
+  }
+}
+
+// A running player answers 'state?' with what it holds; adopt it rather than
+// restarting its clips.
+function adoptPlayerState(m) {
+  state.playerHasState = true;
+  for (const name of ['A', 'B']) {
+    const s = m.decks[name];
+    if (!s) continue;
+    state.decks[name].params = { ...DEFAULT_PARAMS, ...s.params };
+    state.decks[name].playing = !s.paused;
+    if (s.meta && s.meta.key) {
+      state.decks[name].clip = clipFromMeta(s.meta);
+      state.decks[name].source = null;
+    }
+  }
+  state.master = { ...DEFAULT_MASTER, ...m.master };
+  syncInputs();
+  loadPreviews(false);
+  persist();
+}
+
+function sendSync() {
+  const decks = {};
+  for (const name of ['A', 'B']) {
+    const d = state.decks[name];
+    decks[name] = { params: d.params, source: d.source, meta: d.clip ? clipMeta(d.clip) : null, playing: d.playing, time: d.lastTime || preview.videos[name].currentTime || 0 };
+  }
+  bus.send('sync', { decks, master: state.master });
+  state.playerHasState = true;
+  state.playerNeedsSync = ['A', 'B'].some((n) => state.decks[n].clip && !state.decks[n].source);
+}
+const clipMeta = (c) => ({ key: c.key, title: c.title, thumb: c.thumb || '', url: c.url || null, localPath: c.local ? c.local.path : (c.localPath || null), in: c.in || 0, out: c.out || null, source: c.source });
+const clipFromMeta = (m) => ({ key: m.key, title: m.title, thumb: m.thumb, url: m.url, localPath: m.localPath, in: m.in, out: m.out, source: m.source });
+
+$('#open-player').addEventListener('click', () => window.open('player.html', 'vj-elato-player'));
+
+// ---------- resolving and loading clips ----------
+async function resolveSource(clip) {
+  const local = clip.local
+    || (state.library && clip.url && state.library.byUrl.get(clip.url))
+    || (state.library && clip.localPath && state.library.byPath.get(clip.localPath));
+  if (local) {
+    try { return { kind: 'file', file: await getFile(local) }; }
+    catch (e) { console.warn('local file failed, falling back to URL', e); }
+  }
+  if (clip.url) return { kind: 'url', url: clip.url };
+  return null;
+}
+
+async function loadClip(name, clip) {
+  const d = state.decks[name];
+  const source = await resolveSource(clip);
+  if (!source) { alert('This clip is not on the stick (or the folder is not connected) and has no URL.'); return; }
+  d.clip = clip; d.source = source; d.playing = true; d.duration = 0;
+  bus.send('load', { deck: name, source, meta: clipMeta(clip) });
+  if (state.live) preview.load(name, source, clipMeta(clip));
+  $('.title', deckEls[name]).textContent = clip.title;
+  $('img', paneEls[name]).src = clip.thumb || '';
+  const badge = $('.badge', paneEls[name]);
+  badge.textContent = source.kind === 'file' ? 'stick' : 'stream'; badge.className = 'badge';
+  persist();
+}
+
+// After a restore: feed the preview stage (and the player, if it has nothing yet).
+async function loadPreviews(syncPlayer) {
+  let changed = false;
+  for (const name of ['A', 'B']) {
+    const d = state.decks[name];
+    if (!d.clip) continue;
+    if (!d.source) { d.source = await resolveSource(d.clip); changed = true; }
+    if (d.source && state.live) preview.load(name, d.source, { ...clipMeta(d.clip), paused: !d.playing });
+  }
+  if (syncPlayer && changed && state.playerNeedsSync) sendSync();
 }
 
 document.addEventListener('keydown', (e) => {
@@ -197,11 +294,7 @@ document.addEventListener('keydown', (e) => {
     setInput(cf, v); setMaster('crossfade', v); e.preventDefault();
   }
 });
-function toggleDeck(name) {
-  const d = state.decks[name];
-  d.playing = !d.playing;
-  bus.send(d.playing ? 'play' : 'pause', { deck: name });
-}
+function toggleDeck(name) { command(state.decks[name].playing ? 'pause' : 'play', name); }
 
 // ---------- library ----------
 const results = $('#results'), search = $('#search'), filter = $('#filter'), count = $('#count');
@@ -273,7 +366,7 @@ function* localDestockd() {
 function localClip(file) {
   const idx = state.library.index && Object.values(state.library.index.clips).find((r) => r.path === file.path);
   return {
-    key: 'local:' + file.path, source: 'stick', title: file.path, local: file,
+    key: 'local:' + file.path, source: 'stick', title: file.path, local: file, localPath: file.path,
     thumb: idx ? `${state.catalogs.destockd.keyframeBase}${encodeURIComponent(idx.film)}/${idx.shot}.jpg` : '',
     sub: idx ? idx.collections.join(', ') : '',
   };
@@ -328,9 +421,10 @@ $('#pick-folder').addEventListener('click', async () => {
 async function useFolder(handle) {
   folderStatus.textContent = 'scanning…';
   const lib = await scanFolder(handle);
-  state.library = { ...lib, handle };
+  state.library = { ...lib, handle, byPath: new Map(lib.files.map((f) => [f.path, f])) };
   folderStatus.textContent = `${lib.name}: ${lib.files.length} files${lib.byUrl.size ? `, ${lib.byUrl.size} matched to Destockd` : ''}`;
   fillFilter(); render();
+  await loadPreviews(true);     // clips waiting on the stick can now be resolved
 }
 async function restoreLibrary() {
   if (!supportsFolders()) return;
@@ -355,6 +449,24 @@ function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&am
     results.innerHTML = `<div class="notice">Could not load catalogs: ${escapeHtml(e.message)}. Serve the folder over http, not file://.</div>`;
   }
   setTab('destockd');
-  restoreLibrary();
-  bus.send('ping');
+
+  // Restore: prefer what a running player holds; otherwise our last saved state.
+  const saved = loadPersisted();
+  if (saved) {
+    for (const name of ['A', 'B']) {
+      const s = saved.decks && saved.decks[name];
+      if (!s) continue;
+      state.decks[name].params = { ...DEFAULT_PARAMS, ...s.params };
+      state.decks[name].playing = !!s.playing;
+      state.decks[name].clip = s.clip || null;
+    }
+    state.master = { ...DEFAULT_MASTER, ...saved.master };
+    state.live = saved.live !== false;
+  }
+  syncInputs();
+  bus.send('state?');
+  setTimeout(async () => {
+    await restoreLibrary();
+    if (!state.playerHasState) await loadPreviews(true);
+  }, 800);
 })();
