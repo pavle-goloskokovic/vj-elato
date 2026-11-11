@@ -219,6 +219,10 @@ function updateDeckStatus(name, s) {
   if (!s) return;
   const el = deckEls[name], d = state.decks[name];
   d.duration = s.duration || 0;
+  // frozen = not paused, ready, but the time has not moved for ~3 s (a stick clip whose data vanished)
+  if (!s.paused && s.ready && d.lastTime === s.time && s.time > 0) d.frozenSince = d.frozenSince || Date.now(); else d.frozenSince = 0;
+  d.stuck = !!(d.frozenSince && Date.now() - d.frozenSince > 3000);
+  d.lastError = s.error || null;
   d.lastTime = s.time || 0;          // used to resume a reloaded player where it was
   $('.t', el).textContent = fmtTime(s.time);
   $('.d', el).textContent = fmtTime(s.duration);
@@ -699,14 +703,45 @@ async function probeProxy() {
     state.proxy = info && info.proxy ? info : null;
   } catch { state.proxy = null; }
   renderProxy();
-  if (state.proxy) setInterval(refreshProxy, 10000);
+  if (state.proxy) proxyTimer = setTimeout(refreshProxy, 10000);
 }
+let proxyTimer = null;
 async function refreshProxy() {
-  try { const r = await fetch(new URL('proxy/info', location.href), { cache: 'no-store' }); if (r.ok) { state.proxy = await r.json(); renderProxy(); } } catch { /* keep last */ }
+  const wasLost = state.serverLost, wasPresent = state.proxy ? state.proxy.stickPresent !== false : true;
+  try {
+    const r = await fetch(new URL('proxy/info', location.href), { cache: 'no-store' });
+    if (!r.ok) throw new Error(r.status);
+    state.proxy = await r.json(); state.serverLost = false;
+  } catch { state.serverLost = true; }
+  renderProxy();
+  const present = !state.serverLost && state.proxy && state.proxy.stickPresent !== false;
+  if ((wasLost && !state.serverLost) || (!wasPresent && present)) recoverStick();
+  // poll quickly while the server or the stick is missing, slowly otherwise
+  clearTimeout(proxyTimer);
+  proxyTimer = setTimeout(refreshProxy, state.serverLost || !present ? 3000 : 10000);
+}
+// The stick (or the server) is back: rescan the library, resolve what was waiting, and
+// restart decks whose stick clip errored or froze, at the time they stopped. Decks that
+// kept playing from their buffer are left alone.
+async function recoverStick() {
+  if (state.library && state.library.server) await useServerLibrary(); else await loadPreviews(true);
+  for (const name of ['A', 'B']) {
+    const d = state.decks[name];
+    if (!d.clip || !d.source || d.source.via !== 'stick') continue;
+    if (!(d.lastError || d.stuck)) continue;
+    const src = await resolveSource(d.clip);
+    if (!src) continue;
+    d.source = src; d.noSeek = false; d.seekAt = 0; d.stuck = false;
+    bus.send('load', { deck: name, source: src, meta: { ...clipMeta(d.clip), time: d.lastTime || 0, paused: !d.playing } });
+    if (state.live) preview.load(name, src, { ...clipMeta(d.clip), time: d.lastTime || 0, paused: !d.playing });
+  }
 }
 function renderProxy() {
   const p = state.proxy;
   $('.tabs button[data-tab=youtube]').classList.toggle('hidden', !(p && p.youtube));
+  $('#server-status').classList.toggle('hidden', !state.serverLost);
+  $('#stick-status').classList.toggle('hidden', state.serverLost || !p || p.stickPresent !== false);
+  if (p && p.stickPath) $('#stick-status').title = `${p.stickPath} is not reachable. Plug the stick back in: the library and any stalled stick clips recover on their own.`;
   if (!p) { proxyBox.classList.add('hidden'); return; }
   proxyBox.classList.remove('hidden');
   const c = p.cache || {};

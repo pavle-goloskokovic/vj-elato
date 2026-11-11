@@ -1,7 +1,7 @@
 """VJ Elato local server: static files with byte ranges, plus a video proxy with a cache.
 
 usage: python serve.py [port] [folder] [--no-browser] [--cache-gb N] [--reserve-mb N] [--cache-dir DIR] [--no-cache] [--no-proxy]
-                       [--yt-max 720|1080] [--no-adapt]
+                       [--yt-max 720|1080] [--no-adapt] [--stick DIR]
   default folder: the one this file is in (the portable copy on the stick)
 
 Why a proxy: the browser may display a video from any host, but WebGL may only read
@@ -38,7 +38,12 @@ are removed to make room. Only files this proxy wrote are ever deleted.
 import hashlib, json, os, re, shutil, ssl, subprocess, sys, threading, time, urllib.error, urllib.parse, urllib.request, webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
+VALUE_FLAGS = {"--cache-gb", "--reserve-mb", "--cache-dir", "--yt-max", "--fake-speed", "--stick", "--unplug-flag"}
+ARGS, _skip = [], False                      # positionals: port, folder; values of flags are not positionals
+for _a in sys.argv[1:]:
+    if _skip: _skip = False; continue
+    if _a.startswith("--"): _skip = _a in VALUE_FLAGS; continue
+    ARGS.append(_a)
 def opt(name, default):
     if name in sys.argv:
         i = sys.argv.index(name); return sys.argv[i + 1] if i + 1 < len(sys.argv) else default
@@ -46,7 +51,15 @@ def opt(name, default):
 ROOT = os.path.abspath(ARGS[1]) if len(ARGS) > 1 else os.path.dirname(os.path.abspath(__file__))
 PORT = int(ARGS[0]) if ARGS else 8765
 OPEN = "--no-browser" not in sys.argv
-STICK = os.path.dirname(ROOT) if os.path.basename(ROOT).lower() == "vj-elato" else ROOT
+# The stick: given with --stick when the launcher staged the tool to the laptop, otherwise the
+# parent of the vj-elato folder we run from. It may vanish and come back; see stick_present().
+STICK = os.path.abspath(opt("--stick", "")) if opt("--stick", "") else (os.path.dirname(ROOT) if os.path.basename(ROOT).lower() == "vj-elato" else ROOT)
+UNPLUG_FLAG = opt("--unplug-flag", "")          # tests: while this file exists the stick counts as absent
+
+def stick_present():
+    if UNPLUG_FLAG and os.path.exists(UNPLUG_FLAG): return False
+    try: return os.path.isdir(STICK)
+    except OSError: return False
 CACHE_DIR = os.path.abspath(opt("--cache-dir", os.path.join(STICK, "cache")))
 CACHE_CAP = int(float(opt("--cache-gb", "2")) * 1e9)
 RESERVE = int(float(opt("--reserve-mb", "500")) * 1e6)
@@ -279,7 +292,8 @@ class Cache:
         self.entries = {}
         self.fetching = {}           # key -> thread
         self.fetch_on_play = True
-        os.makedirs(folder, exist_ok=True)
+        try: os.makedirs(folder, exist_ok=True)
+        except OSError: pass                      # stick absent at start: created on first use
         try:
             self.entries = json.load(open(self.index_path, encoding="utf-8")).get("entries", {})
         except Exception:
@@ -299,17 +313,23 @@ class Cache:
 
     def save(self):
         with self.lock:
-            tmp = self.index_path + ".tmp"
-            json.dump({"entries": self.entries, "saved": time.time()}, open(tmp, "w", encoding="utf-8"), indent=1)
-            os.replace(tmp, self.index_path)
+            try:
+                os.makedirs(self.dir, exist_ok=True)
+                tmp = self.index_path + ".tmp"
+                json.dump({"entries": self.entries, "saved": time.time()}, open(tmp, "w", encoding="utf-8"), indent=1)
+                os.replace(tmp, self.index_path)
+            except OSError as e:
+                print(f"  cache: could not write index ({e})")
 
     def used(self): return sum(e["bytes"] for e in self.entries.values() if e.get("complete"))
 
     def info(self):
         with self.lock:
+            try: free = shutil.disk_usage(self.dir).free
+            except OSError: free = None
             return {"enabled": True, "dir": self.dir, "cap": self.cap, "reserve": self.reserve, "used": self.used(),
                     "count": sum(1 for e in self.entries.values() if e.get("complete")), "fetching": len(self.fetching),
-                    "free": shutil.disk_usage(self.dir).free}
+                    "free": free}
 
     def path_for(self, url, title=None):
         p = urllib.parse.urlparse(url)
@@ -328,14 +348,17 @@ class Cache:
         with self.lock:
             e = self.entries.get(self.key(url))
             if e and e.get("complete"):
+                path = os.path.join(self.dir, e["file"])
+                if not stick_present() or not os.path.isfile(path): return None      # stick gone: stream it instead
                 e["lastUsed"] = time.time(); self.save()
-                return os.path.join(self.dir, e["file"])
+                return path
         return None
 
     def make_room(self, size):
         """Evict least recently used complete clips until `size` fits under the cap and
         the disk keeps its reserve. Returns False if it cannot fit at all."""
         if size > self.cap: return False
+        if not stick_present(): return False
         with self.lock:
             victims = sorted((e for e in self.entries.values() if e.get("complete")), key=lambda e: e.get("lastUsed") or e.get("added") or 0)
             def fits():
@@ -352,6 +375,7 @@ class Cache:
     def fetch(self, url, source=None, title=None):
         """Download the whole file in the background (once per key). `source` is the address
         to download from when it differs from the key (YouTube's expiring stream url)."""
+        if not stick_present(): return
         k = self.key(url)
         with self.lock:
             if k in self.fetching or (k in self.entries and self.entries[k].get("complete")): return
@@ -487,6 +511,8 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
         if not PROXY_ON and u.path.startswith("/proxy"): return self.send_error(404)
+        if u.path.startswith("/stick/") and not stick_present():
+            return self.json({"error": "stick absent", "stick": STICK}, 503)
         if u.path == "/stick/index": return self.json(scan_stick())
         if u.path.startswith("/stick/"):
             full = stick_path(u.path[len("/stick/"):])
@@ -498,7 +524,7 @@ class Handler(SimpleHTTPRequestHandler):
                 finally: f.close()
             return
         if u.path == "/proxy": return self.proxy(u)
-        if u.path == "/proxy/info": return self.json({"proxy": True, "cache": cache.info() if cache else {"enabled": False}, "fetchOnPlay": bool(cache and cache.fetch_on_play), "stick": STICK, "youtube": bool(YTDLP), "speed": speed.mbps(), "adapt": ADAPT, "ytMax": YT_MAX, "stickLibrary": True})
+        if u.path == "/proxy/info": return self.json({"proxy": True, "cache": cache.info() if cache else {"enabled": False}, "fetchOnPlay": bool(cache and cache.fetch_on_play), "stick": STICK, "youtube": bool(YTDLP), "speed": speed.mbps(), "adapt": ADAPT, "ytMax": YT_MAX, "stickLibrary": True, "stickPresent": stick_present(), "stickPath": STICK})
         if u.path == "/proxy/resolve":
             url = urllib.parse.parse_qs(u.query).get("url", [""])[0]
             info = resolve_youtube(url)
@@ -519,6 +545,7 @@ class Handler(SimpleHTTPRequestHandler):
             if "fetchOnPlay" in data: cache.fetch_on_play = bool(data["fetchOnPlay"])
             return self.json({"fetchOnPlay": cache.fetch_on_play})
         if u.path == "/stick/collections":
+            if not stick_present(): return self.json({"saved": False, "error": "stick absent"})
             try: data = json.loads(body)
             except Exception: data = {}
             try:
@@ -532,9 +559,9 @@ class Handler(SimpleHTTPRequestHandler):
             cache.clear(); return self.json({"cleared": True, "cache": cache.info()})
         self.send_error(404)
 
-    def json(self, obj):
+    def json(self, obj, status=200):
         data = json.dumps(obj).encode()
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -582,6 +609,7 @@ if __name__ == "__main__":
     srv.daemon_threads = True
     url = f"http://localhost:{PORT}/"
     print(f"VJ Elato: serving {ROOT}\n  {url}   (Ctrl+C to stop)")
+    print(f"  stick: {STICK}" + ("" if stick_present() else "  (not present right now)"))
     if not PROXY_ON: print("  proxy off")
     elif cache: print(f"  proxy on, cache {CACHE_DIR} ({cache.used()/1e9:.2f}/{CACHE_CAP/1e9:.1f} GB used, {cache.info()['count']} clips)")
     else: print("  proxy on, cache off")

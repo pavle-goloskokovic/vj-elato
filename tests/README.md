@@ -27,6 +27,9 @@ Scenarios:
   grabbed thumbnail, plays as a same-origin URL on WebGL, and the star writes the collections file.
 - **search** – the YouTube tab searches through yt-dlp, a result plays through the proxy, and a
   resolve carries a SponsorBlock segment list.
+- **unplug** – with the stick simulated absent (the server's `--unplug-flag`) the server reports it,
+  stick requests answer 503 and the controller shows it; when it is back the library rescans and a
+  playing stick clip is still playing.
 
 Why it is set up the way it is:
 

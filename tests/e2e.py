@@ -259,7 +259,35 @@ async def search(ctx, check, logs):
     r = json.load(urllib.request.urlopen(BASE + "proxy/resolve?url=" + urllib.parse.quote(YOUTUBE_TEST, safe=""), timeout=200))
     check("resolve carries a SponsorBlock segment list", isinstance(r.get("segments"), list), r.get("segments"))
 
-SCENARIOS = {"smoke": smoke, "reload": reload, "crop": crop, "proxy": proxy, "youtube": youtube, "adapt": adapt, "stick": stick, "search": search}
+async def unplug(ctx, check, logs):
+    """Simulates pulling the stick (the server's --unplug-flag file) and plugging it back."""
+    import urllib.request, urllib.error
+    flag = os.path.join(OUT, "unplugged.flag")
+    player, ctrl = await open_pages(ctx, logs)
+    await ctrl.wait_for_function("document.querySelector('#folder-status').textContent.includes('clips')", timeout=20000)
+    await ctrl.click(".tabs button[data-tab=stick]"); await ctrl.fill("#search", "stick-test")
+    await ctrl.wait_for_function("document.querySelectorAll('#results .card').length === 1")
+    await ctrl.select_option("#target-deck", "A"); await ctrl.click("#results .card >> nth=0")
+    await ctrl.wait_for_function(DECK_READY, arg="A"); await ctrl.wait_for_timeout(2000)
+    open(flag, "w").write("1")
+    try:
+        info = json.load(urllib.request.urlopen(BASE + "proxy/info", timeout=10))
+        check("server reports the stick as absent", info.get("stickPresent") is False)
+        try: urllib.request.urlopen(BASE + "stick/index", timeout=10); code = 200
+        except urllib.error.HTTPError as e: code = e.code
+        check("stick requests answer 503 while it is absent", code == 503, code)
+        await ctrl.wait_for_function("!document.querySelector('#stick-status').classList.contains('hidden')", timeout=15000)
+        check("controller shows the stick as removed", True)
+        t1 = await player.evaluate("document.getElementById('deckA').currentTime")
+    finally:
+        os.remove(flag)
+    await ctrl.wait_for_function("document.querySelector('#stick-status').classList.contains('hidden')", timeout=15000)
+    await ctrl.wait_for_timeout(2500)
+    status = await ctrl.evaluate("document.querySelector('#folder-status').textContent")
+    t2 = await player.evaluate("() => { const v = document.getElementById('deckA'); return {t: v.currentTime, paused: v.paused, src: v.currentSrc} }")
+    check("stick back: pill clears, library rescanned, deck A still plays its stick clip", status.startswith("stick") and "clips" in status and not t2["paused"] and t2["t"] > t1 and "stick-test" in t2["src"], {"status": status, **t2})
+
+SCENARIOS = {"smoke": smoke, "reload": reload, "crop": crop, "proxy": proxy, "youtube": youtube, "adapt": adapt, "stick": stick, "search": search, "unplug": unplug}
 
 async def run(names, keep):
     from playwright.async_api import async_playwright
@@ -301,8 +329,8 @@ def main():
     failed = []
     # smoke/reload/crop run against plain static hosting (as on GitHub Pages: no proxy),
     # the proxy scenario against the full local server
-    for flags, group in ((["--no-proxy"], [n for n in names if n not in ("proxy", "youtube", "adapt", "stick", "search")]),
-                         (["--cache-gb", "1"], [n for n in names if n in ("proxy", "youtube", "stick", "search")]),
+    for flags, group in ((["--no-proxy"], [n for n in names if n not in ("proxy", "youtube", "adapt", "stick", "search", "unplug")]),
+                         (["--cache-gb", "1", "--unplug-flag", os.path.join(OUT, "unplugged.flag")], [n for n in names if n in ("proxy", "youtube", "stick", "search", "unplug")]),
                          (["--cache-gb", "1", "--fake-speed", "youtube=1.2"], [n for n in names if n == "adapt"])):
         if not group: continue
         srv = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "serve.py"), str(PORT), site, "--no-browser", *flags], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
