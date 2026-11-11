@@ -86,6 +86,8 @@ async def smoke(ctx, check, logs):
     await load_url(ctrl, "B", DESTOCKD_STREAM); await ctrl.wait_for_timeout(1500)
     st = await ctrl.evaluate(PLAYER_STATUS)
     check("Destockd stream on deck B falls back to CSS", st["decks"]["B"]["mode"] == "css" and not st["decks"]["B"]["error"], st["decks"]["B"])
+    av = await ctrl.evaluate("() => ({bKaleido: document.querySelector('.deck[data-deck=B] [data-param=kaleido]').disabled, aKaleido: document.querySelector('.deck[data-deck=A] [data-param=kaleido]').disabled, aBlur: document.querySelector('.deck[data-deck=A] [data-param=blur]').disabled, bBlur: document.querySelector('.deck[data-deck=B] [data-param=blur]').disabled, fb: document.querySelector('[data-master=feedback]').disabled})")
+    check("WebGL-only controls are disabled on the CSS deck, blur on the WebGL deck, feedback stays on", av == {"bKaleido": True, "aKaleido": False, "aBlur": True, "bBlur": False, "fb": False}, av)
     await ctrl.evaluate(CLICK_CMD, ["A", "pause"]); await ctrl.evaluate(SET_MASTER, ["crossfade", "0"]); await ctrl.wait_for_timeout(600)
     plain = gray(await player.screenshot())
     for k, v in (("kaleido", "5"), ("hue", "90"), ("pixelate", "0.3")): await ctrl.evaluate(SET_PARAM, ["A", k, v])

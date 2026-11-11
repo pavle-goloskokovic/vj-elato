@@ -222,8 +222,33 @@ function updateDeckStatus(name, s) {
   $('.mode', el).title = s.mode === 'gl' ? 'All effects available' : 'This source does not allow WebGL to read it (no CORS). Only the basic filters apply.';
   d.mode = s.mode;
   const anyGl = ['A', 'B'].some((n) => state.decks[n].clip && state.decks[n].mode === 'gl');
-  $('#master-hint').classList.toggle('hidden', anyGl || !['A', 'B'].some((n) => state.decks[n].clip));
+  const anyClip = ['A', 'B'].some((n) => state.decks[n].clip);
+  $('#master-hint').classList.toggle('hidden', anyGl || !anyClip);
+  updateAvailability(name, s.mode, anyGl, anyClip);
   syncPreview(name, s);
+}
+
+// Grey out what cannot act: WebGL-only effects on a CSS deck, blur on a WebGL deck, the
+// feedback group when no deck is on WebGL, and the transport of an empty deck. Parameters
+// of an empty deck stay live so a deck can be preset before a clip is loaded.
+const GL_ONLY = new Set(['pixelate', 'rgbShift', 'posterize', 'threshold', 'mirror', 'kaleido']);
+const CSS_ONLY = new Set(['blur']);
+const FEEDBACK = new Set(['feedback', 'fbZoom', 'fbRotate', 'fbHue']);
+function setAvailable(input, on, why) {
+  input.disabled = !on;
+  const label = input.closest('label') || input;
+  label.classList.toggle('off', !on);
+  label.title = on ? '' : why;
+}
+function updateAvailability(name, mode, anyGl, anyClip) {
+  const el = deckEls[name], loaded = !!state.decks[name].clip;
+  for (const input of $$('[data-param]', el)) {
+    const k = input.dataset.param;
+    if (GL_ONLY.has(k)) setAvailable(input, !loaded || mode === 'gl', 'Needs WebGL: this deck plays a stream the browser cannot read. Use a stick clip or the local server.');
+    else if (CSS_ONLY.has(k)) setAvailable(input, !loaded || mode !== 'gl', 'Blur is a CSS filter; on WebGL use pixelate or zoom.');
+  }
+  for (const b of $$('[data-cmd], .scrub', el)) b.disabled = !loaded;
+  for (const input of $$('[data-master]')) if (FEEDBACK.has(input.dataset.master)) setAvailable(input, !anyClip || anyGl, 'Feedback needs a deck on WebGL.');
 }
 
 // Keep the preview in step with the player: nudge it when it drifts, but only
