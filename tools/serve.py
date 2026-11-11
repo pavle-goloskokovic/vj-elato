@@ -1,6 +1,6 @@
 """VJ Elato local server: static files with byte ranges, plus a video proxy with a cache.
 
-usage: python serve.py [port] [folder] [--no-browser] [--cache-gb N] [--reserve-mb N] [--cache-dir DIR] [--no-cache] [--no-proxy]
+usage: python serve.py [port] [folder] [--no-browser] [--cache-gb N] [--reserve-mb N] [--cache-dir DIR] [--no-cache] [--no-proxy] [--yt-max 720|1080]
   default folder: the one this file is in (the portable copy on the stick)
 
 Why a proxy: the browser may display a video from any host, but WebGL may only read
@@ -83,9 +83,11 @@ YT_RE = re.compile(r"^(https?://)?(www\.|m\.)?(youtube\.com/(watch\?.*v=|shorts/
 # H.264 video-only (the player is muted anyway), smallest file that still looks right on a
 # projector: 1080p30, then 720p30, then for 60 fps uploads (which have no 30 fps rendition
 # above 480p) 720p60 before 1080p60, then whatever H.264 or mp4 there is.
-YT_FORMAT = ("bv*[vcodec^=avc1][height=1080][fps<=30]/bv*[vcodec^=avc1][height=720][fps<=30]"
-             "/bv*[vcodec^=avc1][height=720]/bv*[vcodec^=avc1][height=1080]"
-             "/bv*[vcodec^=avc1][height<=1080]/bv*[height<=1080][ext=mp4]/b[height<=1080][ext=mp4]/b[ext=mp4]/b")
+# --yt-max 720 caps the height (slow venue wifi): 720p30, then 720p60, then anything up to 720p.
+YT_MAX = int(opt("--yt-max", "1080"))
+YT_FORMAT = ("bv*[vcodec^=avc1][height=1080][fps<=30]/" if YT_MAX >= 1080 else "") + (
+             "bv*[vcodec^=avc1][height=720][fps<=30]/bv*[vcodec^=avc1][height=720]"
+             f"/bv*[vcodec^=avc1][height<={YT_MAX}]/bv*[height<={YT_MAX}][ext=mp4]/b[height<={YT_MAX}][ext=mp4]/b[ext=mp4]/b")
 
 def youtube_id(url):
     m = YT_RE.match(url or "")
@@ -375,7 +377,7 @@ if __name__ == "__main__":
     if not PROXY_ON: print("  proxy off")
     elif cache: print(f"  proxy on, cache {CACHE_DIR} ({cache.used()/1e9:.2f}/{CACHE_CAP/1e9:.1f} GB used, {cache.info()['count']} clips)")
     else: print("  proxy on, cache off")
-    if PROXY_ON: print(f"  youtube via {YTDLP}" if YTDLP else "  youtube off (no yt-dlp found)")
+    if PROXY_ON: print(f"  youtube via {YTDLP}, up to {YT_MAX}p" if YTDLP else "  youtube off (no yt-dlp found)")
     if OPEN: threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
