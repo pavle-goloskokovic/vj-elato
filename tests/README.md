@@ -22,6 +22,7 @@ Scenarios:
 - **proxy** – a Destockd stream goes through the local proxy and plays on WebGL, fetch on play
   stores the whole clip in the cache, a second play comes from the cache, the toggle reaches the server.
 - **youtube** – a YouTube link resolves through yt-dlp and plays on WebGL (skipped without yt-dlp).
+- **adapt** – with a faked 1.2 Mbps link the server picks a rendition below 720p.
 
 Why it is set up the way it is:
 

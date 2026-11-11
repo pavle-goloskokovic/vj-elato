@@ -313,8 +313,18 @@ async function loadClip(name, clip) {
   $('.title', deckEls[name]).textContent = clip.title;
   setPaneThumb(name, clip);
   const badge = $('.badge', paneEls[name]);
-  badge.textContent = sourceLabel(source); badge.className = 'badge';
+  badge.textContent = sourceLabel(source) + stallNote(clip, source); badge.className = 'badge';
   persist();
+}
+// A proxied stream heavier than half the host's measured throughput may stall: warn on the badge.
+function stallNote(clip, source) {
+  if (!source || source.via !== 'proxy' || !state.proxy || !state.proxy.speed) return '';
+  if (clip.stall) return ' · may stall';
+  if (!clip.bytes || !clip.duration) return '';
+  const host = (() => { try { const h = new URL(clip.url).hostname; return h.endsWith('archive.org') ? 'archive.org' : h.includes('youtube') ? 'youtube' : h; } catch { return ''; } })();
+  const mbps = state.proxy.speed[host];
+  if (!mbps) return '';
+  return clip.bytes * 8 / clip.duration / 1e6 * 2 > mbps ? ' · may stall' : '';
 }
 const sourceLabel = (src) => !src ? '' : src.kind === 'file' ? 'stick' : src.via === 'proxy' ? 'proxy' : 'stream';
 
@@ -541,8 +551,8 @@ $('#url-load').addEventListener('click', async () => {
     const r = await fetch(new URL('proxy/resolve?url=' + encodeURIComponent(url), location.href));
     const info = await r.json();
     if (info.error) { status.textContent = 'YouTube: ' + info.error; return; }
-    status.textContent = `${info.title} · ${info.height}p`;
-    loadClip($('#target-deck').value, { key: 'yt:' + info.id, source: 'youtube', youtube: true, title: info.title, url: info.key, thumb: info.thumbnail || '', duration: info.duration });
+    status.textContent = `${info.title} · ${info.height}p${info.fps > 30 ? info.fps : ''}${info.speedMbps ? ` · link ${info.speedMbps} Mbps` : ''}${info.stall ? ' · may stall, lowest rendition' : ''}`;
+    loadClip($('#target-deck').value, { key: 'yt:' + info.id, source: 'youtube', youtube: true, title: info.title, url: info.key, thumb: info.thumbnail || '', duration: info.duration, bytes: info.tbr && info.duration ? info.tbr * 125 * info.duration : null, stall: info.stall });
   } catch (e) { status.textContent = 'YouTube: ' + e.message; }
 });
 
@@ -596,6 +606,9 @@ function renderProxy() {
   proxyBox.classList.remove('hidden');
   const c = p.cache || {};
   $('#proxy-cache', proxyBox).textContent = (c.enabled ? `cache ${fmtBytes(c.used)} / ${fmtBytes(c.cap)} · ${c.count} clips${c.fetching ? ` · fetching ${c.fetching}` : ''}` : 'cache off') + (p.youtube ? ' · youtube' : '');
+  const sp = Object.entries(p.speed || {});
+  $('#link-speed', proxyBox).textContent = sp.length ? 'link ' + sp.map(([h, m]) => `${h} ${m} Mbps`).join(' · ') : '';
+  $('#link-speed', proxyBox).title = 'Throughput the local server measured from each host; a stream whose bitrate exceeds half of it may stall';
   $('#fetch-on-play', proxyBox).checked = !!p.fetchOnPlay;
 }
 $('#fetch-on-play').addEventListener('change', async (e) => {

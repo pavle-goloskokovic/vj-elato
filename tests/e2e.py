@@ -15,7 +15,7 @@ The clip: by default the first .mp4 found on a stick that carries
 destockd-index.json (drives D: to H: on Windows); pass --clip to use any
 H.264 mp4 of at least a few seconds.
 """
-import argparse, asyncio, io, json, os, shutil, subprocess, sys, time
+import argparse, asyncio, io, json, os, shutil, subprocess, sys, time, urllib.parse
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SITE = os.path.join(ROOT, "tests", "_site")
@@ -189,7 +189,17 @@ async def youtube(ctx, check, logs):
     check("YouTube video plays through the proxy on WebGL", st["decks"]["A"]["mode"] == "gl" and not st["decks"]["A"]["error"] and (st["decks"]["A"]["duration"] or 0) > 60, f"mode={st['decks']['A']['mode']} dur={st['decks']['A']['duration']} err={st['decks']['A']['error']}")
     check("thumbnail comes from YouTube", "ytimg.com" in (await ctrl.evaluate("document.querySelector('.pane[data-pane=A] img').src")))
 
-SCENARIOS = {"smoke": smoke, "reload": reload, "crop": crop, "proxy": proxy, "youtube": youtube}
+async def adapt(ctx, check, logs):
+    """Runs against a server started with --fake-speed youtube=1.2: the pick must drop below 720p."""
+    import urllib.request
+    info = json.load(urllib.request.urlopen(BASE + "proxy/info", timeout=10))
+    if not info.get("youtube"):
+        print("  skip: no yt-dlp on this machine"); return
+    check("server reports the (faked) link speed", info.get("speed", {}).get("youtube") == 1.2, info.get("speed"))
+    r = json.load(urllib.request.urlopen(BASE + "proxy/resolve?url=" + urllib.parse.quote(YOUTUBE_TEST, safe=""), timeout=200))
+    check("a 1.2 Mbps link gets a rendition below 720p", "error" not in r and r["height"] < 720 and r["tbr"] * 1000 * 2 <= 1.2e6 + 1, {k: r.get(k) for k in ("height", "fps", "tbr", "speedMbps", "stall", "error")})
+
+SCENARIOS = {"smoke": smoke, "reload": reload, "crop": crop, "proxy": proxy, "youtube": youtube, "adapt": adapt}
 
 async def run(names, keep):
     from playwright.async_api import async_playwright
@@ -229,7 +239,9 @@ def main():
     failed = []
     # smoke/reload/crop run against plain static hosting (as on GitHub Pages: no proxy),
     # the proxy scenario against the full local server
-    for flags, group in ((["--no-proxy"], [n for n in names if n not in ("proxy", "youtube")]), (["--cache-gb", "1"], [n for n in names if n in ("proxy", "youtube")])):
+    for flags, group in ((["--no-proxy"], [n for n in names if n not in ("proxy", "youtube", "adapt")]),
+                         (["--cache-gb", "1"], [n for n in names if n in ("proxy", "youtube")]),
+                         (["--cache-gb", "1", "--fake-speed", "youtube=1.2"], [n for n in names if n == "adapt"])):
         if not group: continue
         srv = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "serve.py"), str(PORT), site, "--no-browser", *flags], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:

@@ -1,6 +1,7 @@
 """VJ Elato local server: static files with byte ranges, plus a video proxy with a cache.
 
-usage: python serve.py [port] [folder] [--no-browser] [--cache-gb N] [--reserve-mb N] [--cache-dir DIR] [--no-cache] [--no-proxy] [--yt-max 720|1080]
+usage: python serve.py [port] [folder] [--no-browser] [--cache-gb N] [--reserve-mb N] [--cache-dir DIR] [--no-cache] [--no-proxy]
+                       [--yt-max 720|1080] [--no-adapt]
   default folder: the one this file is in (the portable copy on the stick)
 
 Why a proxy: the browser may display a video from any host, but WebGL may only read
@@ -19,7 +20,10 @@ same-origin, so the player can run it through the full effect chain.
 YouTube: a watch URL given to /proxy is resolved with yt-dlp (yt-dlp.exe next to this file,
 or on PATH) to a direct H.264 video stream, which is then proxied and cached like any other
 URL, keyed by the video id so the short-lived stream address never creates duplicates.
-The stream is video-only; the player is muted anyway.
+The stream is video-only; the player is muted anyway. The rendition follows the link: the
+server learns each host's throughput from its cache downloads (and a 2.5 s probe on the
+first YouTube resolve) and picks the highest H.264 rendition up to --yt-max whose bitrate
+is at most half of it; --no-adapt always takes the best. /proxy/info reports the speeds.
 
 The cache lives in <stick root>/cache (the parent of the vj-elato folder), capped at
 --cache-gb (default 2) and never eating into --reserve-mb (default 500) of free space.
@@ -78,16 +82,57 @@ def upstream_size(url):
     except Exception:
         return None
 
+# ---------- link speed ----------
+# Throughput per upstream host group, learned from the cache's full-speed downloads and from
+# short probes. Pass-through streaming is not used: the browser reads a video only as fast
+# as it buffers, so that would measure consumption, not the link.
+def host_group(url):
+    h = (urllib.parse.urlparse(url).hostname or "").lower()
+    if h.endswith("googlevideo.com") or h.endswith("youtube.com"): return "youtube"
+    if h.endswith("archive.org"): return "archive.org"
+    return h
+
+class Speed:
+    def __init__(self):
+        self.bps = {}                        # group -> bytes per second, exponentially smoothed
+        self.lock = threading.Lock()
+        for spec in opt("--fake-speed", "").split(","):     # tests: --fake-speed youtube=1.5,archive.org=0.8 (Mbps)
+            if "=" in spec:
+                g, mbps = spec.split("="); self.bps[g.strip()] = float(mbps) * 1e6 / 8
+        self.fake = bool(self.bps)
+    def record(self, url, nbytes, seconds):
+        if self.fake or nbytes < 400_000 or seconds < 0.4: return
+        g = host_group(url); v = nbytes / seconds
+        with self.lock:
+            old = self.bps.get(g)
+            self.bps[g] = v if old is None else old * 0.6 + v * 0.4
+    def get(self, url):
+        return self.bps.get(host_group(url))
+    def mbps(self):
+        return {g: round(v * 8 / 1e6, 2) for g, v in self.bps.items()}
+    def probe(self, url, seconds=2.5):
+        """Download from url for a few seconds and record the rate; returns bytes/s or None."""
+        if self.fake: return self.get(url)
+        try:
+            t0 = time.time(); got = 0
+            with upstream(url) as r:
+                while time.time() - t0 < seconds:
+                    chunk = r.read(CHUNK)
+                    if not chunk: break
+                    got += len(chunk)
+            el = time.time() - t0
+            self.record(url, got, el)
+            return got / el if el > 0 else None
+        except Exception as e:
+            print(f"  probe failed: {e}"); return None
+
+speed = Speed()
+ADAPT = "--no-adapt" not in sys.argv
+
 # ---------- YouTube via yt-dlp ----------
 YT_RE = re.compile(r"^(https?://)?(www\.|m\.)?(youtube\.com/(watch\?.*v=|shorts/|live/|embed/)|youtu\.be/)([A-Za-z0-9_-]{11})")
-# H.264 video-only (the player is muted anyway), smallest file that still looks right on a
-# projector: 1080p30, then 720p30, then for 60 fps uploads (which have no 30 fps rendition
-# above 480p) 720p60 before 1080p60, then whatever H.264 or mp4 there is.
-# --yt-max 720 caps the height (slow venue wifi): 720p30, then 720p60, then anything up to 720p.
-YT_MAX = int(opt("--yt-max", "1080"))
-YT_FORMAT = ("bv*[vcodec^=avc1][height=1080][fps<=30]/" if YT_MAX >= 1080 else "") + (
-             "bv*[vcodec^=avc1][height=720][fps<=30]/bv*[vcodec^=avc1][height=720]"
-             f"/bv*[vcodec^=avc1][height<={YT_MAX}]/bv*[height<={YT_MAX}][ext=mp4]/b[height<={YT_MAX}][ext=mp4]/b[ext=mp4]/b")
+YT_MAX = int(opt("--yt-max", "1080"))        # hard ceiling on height
+STALL_MARGIN = 2.0                           # a rendition is "safe" when the link delivers 2x its bitrate
 
 def youtube_id(url):
     m = YT_RE.match(url or "")
@@ -99,33 +144,73 @@ def find_ytdlp():
     return shutil.which("yt-dlp")
 
 YTDLP = find_ytdlp()
-_yt_cache, _yt_lock = {}, threading.Lock()        # id -> (resolved dict, time)
+_yt_cache, _yt_lock = {}, threading.Lock()        # id -> (info json, time)
 
-def resolve_youtube(url):
-    """{id, title, duration, thumbnail, height, url (direct stream), key (canonical watch url)} or {error}."""
-    vid = youtube_id(url)
-    if not vid: return {"error": "not a YouTube url"}
+def yt_info(vid):
     with _yt_lock:
         hit = _yt_cache.get(vid)
         if hit and time.time() - hit[1] < 3600: return hit[0]
-    if not YTDLP: return {"error": "yt-dlp not found: put yt-dlp.exe next to serve.py or install it"}
-    cmd = [YTDLP, "--no-playlist", "--no-warnings", "-f", YT_FORMAT,
-           "--print", "%(id)s\t%(title)s\t%(duration)s\t%(thumbnail)s\t%(height)s\t%(vcodec)s", "--print", "%(url)s",
-           f"https://www.youtube.com/watch?v={vid}"]
+    cmd = [YTDLP, "--no-playlist", "--no-warnings", "-J", f"https://www.youtube.com/watch?v={vid}"]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=150)
     except subprocess.TimeoutExpired:
         return {"error": "yt-dlp timed out"}
-    lines = [l for l in r.stdout.splitlines() if l.strip()]
-    if r.returncode != 0 or len(lines) < 2:
+    if r.returncode != 0 or not r.stdout.strip():
         msg = (r.stderr or "").strip().splitlines()
         return {"error": (msg[-1] if msg else "yt-dlp failed")[:200]}
-    meta, direct = lines[0].split("\t"), lines[-1].strip()
-    info = {"id": meta[0], "title": meta[1], "duration": float(meta[2]) if meta[2] not in ("", "NA") else None,
-            "thumbnail": meta[3] if meta[3] != "NA" else "", "height": meta[4], "vcodec": meta[5],
-            "url": direct, "key": f"https://www.youtube.com/watch?v={meta[0]}"}
+    try: info = json.loads(r.stdout)
+    except Exception: return {"error": "yt-dlp returned no JSON"}
     with _yt_lock: _yt_cache[vid] = (info, time.time())
     return info
+
+def yt_candidates(info):
+    """H.264 mp4 renditions up to YT_MAX, best first: 1080p30, 720p30, then 720p60 before 1080p60
+    (60 fps buys nothing for a VJ set and doubles the file), then the rest by height."""
+    out = []
+    for f in info.get("formats", []):
+        if not f.get("url") or f.get("ext") != "mp4": continue
+        if not str(f.get("vcodec", "")).startswith("avc1"): continue
+        h = f.get("height") or 0
+        if not h or h > YT_MAX: continue
+        out.append({"id": f.get("format_id"), "height": h, "fps": f.get("fps") or 30, "tbr": f.get("tbr") or 0,
+                    "url": f["url"], "video_only": f.get("acodec") in (None, "none")})
+    def rank(f):
+        h, hi = f["height"], f["fps"] > 30
+        if h == 1080 and not hi: return 0
+        if h == 720 and not hi: return 1
+        if h == 720: return 2
+        if h == 1080: return 3
+        return 4
+    out.sort(key=lambda f: (rank(f), -f["height"], f["fps"] > 30, f["tbr"]))
+    return out
+
+def yt_pick(cands):
+    """The best rendition the link can carry with margin; the smallest one if nothing fits."""
+    if not cands: return None, None
+    bps = speed.get(cands[0]["url"])
+    if not ADAPT or not bps:
+        if ADAPT and not bps:
+            bps = speed.probe(cands[0]["url"])
+        if not bps: return cands[0], None
+    for f in cands:
+        if f["tbr"] * 1000 * STALL_MARGIN <= bps * 8: return f, bps
+    return cands[-1], bps
+
+def resolve_youtube(url):
+    """{id, title, duration, thumbnail, height, fps, tbr, speedMbps, stall, url (stream), key} or {error}."""
+    vid = youtube_id(url)
+    if not vid: return {"error": "not a YouTube url"}
+    if not YTDLP: return {"error": "yt-dlp not found: put yt-dlp.exe next to serve.py or install it"}
+    info = yt_info(vid)
+    if "error" in info: return info
+    cands = yt_candidates(info)
+    chosen, bps = yt_pick(cands)
+    if not chosen: return {"error": "no H.264 mp4 rendition"}
+    return {"id": vid, "title": info.get("title") or vid, "duration": info.get("duration"),
+            "thumbnail": info.get("thumbnail") or "", "height": chosen["height"], "fps": chosen["fps"], "tbr": chosen["tbr"],
+            "formatId": chosen["id"], "speedMbps": round(bps * 8 / 1e6, 2) if bps else None,
+            "stall": bool(bps and chosen["tbr"] * 1000 * STALL_MARGIN > bps * 8),
+            "url": chosen["url"], "key": f"https://www.youtube.com/watch?v={vid}"}
 
 # ---------- cache ----------
 class Cache:
@@ -223,12 +308,13 @@ class Cache:
                 print(f"  cache: not caching {url[:60]} ({'unknown size' if not size else 'no room'})"); return
             rel = self.path_for(url, title); full = os.path.join(self.dir, rel); part = full + ".part"
             os.makedirs(os.path.dirname(full), exist_ok=True)
-            got = 0
+            got = 0; t0 = time.time()
             with upstream(source) as r, open(part, "wb") as f:
                 while True:
                     chunk = r.read(CHUNK)
                     if not chunk: break
                     f.write(chunk); got += len(chunk)
+            speed.record(source, got, time.time() - t0)
             if got != size:
                 os.remove(part); print(f"  cache: size mismatch for {rel} ({got} of {size})"); return
             os.replace(part, full)
@@ -303,7 +389,7 @@ class Handler(SimpleHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         if not PROXY_ON and u.path.startswith("/proxy"): return self.send_error(404)
         if u.path == "/proxy": return self.proxy(u)
-        if u.path == "/proxy/info": return self.json({"proxy": True, "cache": cache.info() if cache else {"enabled": False}, "fetchOnPlay": bool(cache and cache.fetch_on_play), "stick": STICK, "youtube": bool(YTDLP)})
+        if u.path == "/proxy/info": return self.json({"proxy": True, "cache": cache.info() if cache else {"enabled": False}, "fetchOnPlay": bool(cache and cache.fetch_on_play), "stick": STICK, "youtube": bool(YTDLP), "speed": speed.mbps(), "adapt": ADAPT, "ytMax": YT_MAX})
         if u.path == "/proxy/resolve":
             url = urllib.parse.parse_qs(u.query).get("url", [""])[0]
             info = resolve_youtube(url)
@@ -377,7 +463,7 @@ if __name__ == "__main__":
     if not PROXY_ON: print("  proxy off")
     elif cache: print(f"  proxy on, cache {CACHE_DIR} ({cache.used()/1e9:.2f}/{CACHE_CAP/1e9:.1f} GB used, {cache.info()['count']} clips)")
     else: print("  proxy on, cache off")
-    if PROXY_ON: print(f"  youtube via {YTDLP}, up to {YT_MAX}p" if YTDLP else "  youtube off (no yt-dlp found)")
+    if PROXY_ON: print(f"  youtube via {YTDLP}, up to {YT_MAX}p, {'quality follows the measured link' if ADAPT else 'fixed quality'}" if YTDLP else "  youtube off (no yt-dlp found)")
     if OPEN: threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try: srv.serve_forever()
     except KeyboardInterrupt: pass
