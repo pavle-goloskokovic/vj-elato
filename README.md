@@ -31,6 +31,8 @@ Keys on the controller: `1`/`2` play-pause A/B, `←`/`→` crossfader, `B` blac
 
 The local server also proxies video (`/proxy?url=…`). Served through it a stream is same-origin, so the browser lets WebGL read it and Destockd and archive.org clips get the full effect chain whenever the laptop has internet. The controller detects the proxy and routes streams through it on its own; on GitHub Pages there is no proxy and streams stay on the CSS layer.
 
+**YouTube** works through the same proxy when yt-dlp is available (the portable copy bundles `yt-dlp.exe`; elsewhere install it on PATH): paste a watch, shorts or youtu.be link in the URL tab, the server resolves it to a 1080p H.264 video-only stream (the player is muted anyway), proxies it with the effects, and caches it under `cache\youtube\` by video id. Resolving takes a few seconds. Only content whose owner permits it, please.
+
 With **fetch on play** (default on, toggle in the header) the first play of a stream also downloads the whole file to `<stick>\cache\`. A clip is listed only once complete. The cache is capped at 2 GB (`--cache-gb`) and keeps 500 MB of the stick free (`--reserve-mb`); least recently used clips are removed to make room, and only files the proxy wrote are ever deleted. Cached clips show up in the Stick tab, carry the `stick` badge in the catalogs and play offline like any other local clip.
 
 With the stick as clip folder everything local works without internet: clips, their thumbnails (the `.jpg` next to each clip, or a frame grabbed from the video and cached), effects, and collections. Only the Destockd and Spelunkr catalogs' hotlinked thumbnails and streams need a connection.

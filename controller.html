@@ -45,7 +45,7 @@
       <div id="url-panel" class="hidden">
         <input id="url-input" type="url" placeholder="https://…/clip.mp4">
         <button id="url-load">Load</button>
-        <p class="muted">Any direct video URL. Streams play as a plain layer with the basic filters; the WebGL effects need local files from the clip folder.</p>
+        <p class="muted">Any direct video URL, or a YouTube link when running from the stick (resolved by yt-dlp). Through the local server streams get the WebGL effects; on the web they play as a plain layer with the basic filters. <span id="url-status" class="hint"></span></p>
       </div>
       <div id="results"></div>
     </section>

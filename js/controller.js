@@ -296,9 +296,11 @@ async function resolveSource(clip) {
     catch (e) { console.warn('local file failed, falling back to URL', e); }
   }
   if (clip.url && state.proxy) return { kind: 'url', url: proxyUrl(clip.url), via: 'proxy' };
+  if (clip.youtube) { alert('YouTube needs the local server with yt-dlp (run from the stick).'); return null; }
   if (clip.url) return { kind: 'url', url: clip.url };
   return null;
 }
+const YT_RE = /^(https?:\/\/)?(www\.|m\.)?(youtube\.com\/(watch\?.*v=|shorts\/|live\/|embed\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/;
 const proxyUrl = (u) => new URL('proxy?url=' + encodeURIComponent(u), location.href).href;
 
 async function loadClip(name, clip) {
@@ -526,10 +528,22 @@ const thumbObserver = new IntersectionObserver((entries) => {
   for (const en of entries) if (en.isIntersecting && en.target._load) { thumbObserver.unobserve(en.target); en.target._load(); en.target._load = null; }
 }, { root: results, rootMargin: '300px' });
 
-$('#url-load').addEventListener('click', () => {
+$('#url-load').addEventListener('click', async () => {
   const url = $('#url-input').value.trim();
   if (!url) return;
-  loadClip($('#target-deck').value, { key: 'url:' + url, source: 'url', title: url.split('/').pop() || url, url, thumb: '' });
+  const yt = YT_RE.exec(url);
+  if (!yt) { loadClip($('#target-deck').value, { key: 'url:' + url, source: 'url', title: url.split('/').pop() || url, url, thumb: '' }); return; }
+  // YouTube: the local proxy resolves it with yt-dlp; ask for the title and thumbnail first
+  const status = $('#url-status');
+  if (!state.proxy || !state.proxy.youtube) { status.textContent = 'YouTube needs the local server with yt-dlp (run from the stick).'; return; }
+  status.textContent = 'resolving with yt-dlp…';
+  try {
+    const r = await fetch(new URL('proxy/resolve?url=' + encodeURIComponent(url), location.href));
+    const info = await r.json();
+    if (info.error) { status.textContent = 'YouTube: ' + info.error; return; }
+    status.textContent = `${info.title} · ${info.height}p`;
+    loadClip($('#target-deck').value, { key: 'yt:' + info.id, source: 'youtube', youtube: true, title: info.title, url: info.key, thumb: info.thumbnail || '', duration: info.duration });
+  } catch (e) { status.textContent = 'YouTube: ' + e.message; }
 });
 
 // ---------- clip folder ----------
@@ -581,7 +595,7 @@ function renderProxy() {
   if (!p) { proxyBox.classList.add('hidden'); return; }
   proxyBox.classList.remove('hidden');
   const c = p.cache || {};
-  $('#proxy-cache', proxyBox).textContent = c.enabled ? `cache ${fmtBytes(c.used)} / ${fmtBytes(c.cap)} · ${c.count} clips${c.fetching ? ` · fetching ${c.fetching}` : ''}` : 'cache off';
+  $('#proxy-cache', proxyBox).textContent = (c.enabled ? `cache ${fmtBytes(c.used)} / ${fmtBytes(c.cap)} · ${c.count} clips${c.fetching ? ` · fetching ${c.fetching}` : ''}` : 'cache off') + (p.youtube ? ' · youtube' : '');
   $('#fetch-on-play', proxyBox).checked = !!p.fetchOnPlay;
 }
 $('#fetch-on-play').addEventListener('change', async (e) => {

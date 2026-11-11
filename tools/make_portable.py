@@ -17,6 +17,7 @@ DIRS = ["css", "js", "catalog"]
 SERVE = ["serve.py", "serve.cmd", "serve.sh"]
 PY_VERSION = "3.13.10"
 PY_URL = f"https://www.python.org/ftp/python/{PY_VERSION}/python-{PY_VERSION}-embed-amd64.zip"
+YTDLP_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
 
 def download(url):
     """urllib first; curl if Python cannot use the machine's certificate store (seen on
@@ -41,6 +42,15 @@ def fetch_python(dest):
     zipfile.ZipFile(io.BytesIO(data)).extractall(pydir)
     print(f"  unpacked to {pydir} ({sum(os.path.getsize(os.path.join(pydir, f)) for f in os.listdir(pydir))/1e6:.1f} MB)")
 
+def fetch_ytdlp(dest):
+    exe = os.path.join(dest, "yt-dlp.exe")
+    if os.path.isfile(exe):
+        print("yt-dlp.exe already on the stick (delete it to refresh)"); return
+    print("downloading yt-dlp.exe (YouTube resolver) ...")
+    data = download(YTDLP_URL)
+    if not data: print("  could not download; YouTube will need yt-dlp on PATH"); return
+    open(exe, "wb").write(data); print(f"  saved ({len(data)/1e6:.1f} MB)")
+
 def main():
     if len(sys.argv) < 2: print(__doc__); sys.exit(1)
     dest = os.path.join(sys.argv[1], "vj-elato")
@@ -63,7 +73,7 @@ def main():
                 "stick clips, their thumbnails, collections and effects are all local.\n"
                 "With internet, streams go through the local proxy, get the WebGL effects, and\n"
                 "are cached in <stick>/cache (2 GB, least recently used clips make room).\n")
-    if "--no-python" not in sys.argv and os.name == "nt": fetch_python(dest)
+    if "--no-python" not in sys.argv and os.name == "nt": fetch_python(dest); fetch_ytdlp(dest)
     total = sum(os.path.getsize(os.path.join(r, f)) for r, _, fs in os.walk(dest) for f in fs)
     print(f"portable copy written to {dest}  ({total/1e6:.1f} MB)")
 

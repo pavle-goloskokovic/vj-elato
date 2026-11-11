@@ -14,6 +14,12 @@ same-origin, so the player can run it through the full effect chain.
   GET  /proxy/list                       cache entries (url -> file relative to the stick root)
   POST /proxy/settings  {"fetchOnPlay": bool}
   POST /proxy/clear
+  GET  /proxy/resolve?url=<youtube url>  {id, title, duration, thumbnail} via yt-dlp, or {error}
+
+YouTube: a watch URL given to /proxy is resolved with yt-dlp (yt-dlp.exe next to this file,
+or on PATH) to a direct H.264 video stream, which is then proxied and cached like any other
+URL, keyed by the video id so the short-lived stream address never creates duplicates.
+The stream is video-only; the player is muted anyway.
 
 The cache lives in <stick root>/cache (the parent of the vj-elato folder), capped at
 --cache-gb (default 2) and never eating into --reserve-mb (default 500) of free space.
@@ -21,7 +27,7 @@ With fetch-on-play, the first play of a stream also downloads the whole file in 
 background; a file is listed as cached only once complete. Least recently used clips
 are removed to make room. Only files this proxy wrote are ever deleted.
 """
-import hashlib, json, os, re, shutil, ssl, sys, threading, time, urllib.parse, urllib.request, webbrowser
+import hashlib, json, os, re, shutil, ssl, subprocess, sys, threading, time, urllib.parse, urllib.request, webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
@@ -72,6 +78,50 @@ def upstream_size(url):
     except Exception:
         return None
 
+# ---------- YouTube via yt-dlp ----------
+YT_RE = re.compile(r"^(https?://)?(www\.|m\.)?(youtube\.com/(watch\?.*v=|shorts/|live/|embed/)|youtu\.be/)([A-Za-z0-9_-]{11})")
+# H.264 video-only (the player is muted anyway): 720-1080p at <=30 fps when it exists, else the
+# best H.264 up to 1080p (60 fps uploads often have no 30 fps rendition above 480p), else any mp4
+YT_FORMAT = "bv*[vcodec^=avc1][height>=720][height<=1080][fps<=30]/bv*[vcodec^=avc1][height<=1080]/bv*[height<=1080][ext=mp4]/b[height<=1080][ext=mp4]/b[ext=mp4]/b"
+
+def youtube_id(url):
+    m = YT_RE.match(url or "")
+    return m.group(5) if m else None
+
+def find_ytdlp():
+    local = os.path.join(ROOT, "yt-dlp.exe" if os.name == "nt" else "yt-dlp")
+    if os.path.isfile(local): return local
+    return shutil.which("yt-dlp")
+
+YTDLP = find_ytdlp()
+_yt_cache, _yt_lock = {}, threading.Lock()        # id -> (resolved dict, time)
+
+def resolve_youtube(url):
+    """{id, title, duration, thumbnail, height, url (direct stream), key (canonical watch url)} or {error}."""
+    vid = youtube_id(url)
+    if not vid: return {"error": "not a YouTube url"}
+    with _yt_lock:
+        hit = _yt_cache.get(vid)
+        if hit and time.time() - hit[1] < 3600: return hit[0]
+    if not YTDLP: return {"error": "yt-dlp not found: put yt-dlp.exe next to serve.py or install it"}
+    cmd = [YTDLP, "--no-playlist", "--no-warnings", "-f", YT_FORMAT,
+           "--print", "%(id)s\t%(title)s\t%(duration)s\t%(thumbnail)s\t%(height)s\t%(vcodec)s", "--print", "%(url)s",
+           f"https://www.youtube.com/watch?v={vid}"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=150)
+    except subprocess.TimeoutExpired:
+        return {"error": "yt-dlp timed out"}
+    lines = [l for l in r.stdout.splitlines() if l.strip()]
+    if r.returncode != 0 or len(lines) < 2:
+        msg = (r.stderr or "").strip().splitlines()
+        return {"error": (msg[-1] if msg else "yt-dlp failed")[:200]}
+    meta, direct = lines[0].split("\t"), lines[-1].strip()
+    info = {"id": meta[0], "title": meta[1], "duration": float(meta[2]) if meta[2] not in ("", "NA") else None,
+            "thumbnail": meta[3] if meta[3] != "NA" else "", "height": meta[4], "vcodec": meta[5],
+            "url": direct, "key": f"https://www.youtube.com/watch?v={meta[0]}"}
+    with _yt_lock: _yt_cache[vid] = (info, time.time())
+    return info
+
 # ---------- cache ----------
 class Cache:
     def __init__(self, folder, cap, reserve):
@@ -113,8 +163,12 @@ class Cache:
                     "count": sum(1 for e in self.entries.values() if e.get("complete")), "fetching": len(self.fetching),
                     "free": shutil.disk_usage(self.dir).free}
 
-    def path_for(self, url):
+    def path_for(self, url, title=None):
         p = urllib.parse.urlparse(url)
+        vid = youtube_id(url)
+        if vid:
+            slug = re.sub(r"[^A-Za-z0-9]+", "-", title or "").strip("-")[:60]
+            return os.path.join("youtube", f"{vid}{'-' + slug if slug else ''}.mp4")
         name = urllib.parse.unquote(p.path.rsplit("/", 1)[-1]) or "video"
         name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)[:80]
         base, ext = os.path.splitext(name)
@@ -147,24 +201,25 @@ class Cache:
             self.save()
             return fits()
 
-    def fetch(self, url):
-        """Download the whole file in the background (once per url)."""
+    def fetch(self, url, source=None, title=None):
+        """Download the whole file in the background (once per key). `source` is the address
+        to download from when it differs from the key (YouTube's expiring stream url)."""
         k = self.key(url)
         with self.lock:
             if k in self.fetching or (k in self.entries and self.entries[k].get("complete")): return
-            t = threading.Thread(target=self._fetch, args=(url, k), daemon=True)
+            t = threading.Thread(target=self._fetch, args=(url, k, source or url, title), daemon=True)
             self.fetching[k] = t
         t.start()
 
-    def _fetch(self, url, k):
+    def _fetch(self, url, k, source, title):
         try:
-            size = upstream_size(url)
+            size = upstream_size(source)
             if not size or not self.make_room(size):
                 print(f"  cache: not caching {url[:60]} ({'unknown size' if not size else 'no room'})"); return
-            rel = self.path_for(url); full = os.path.join(self.dir, rel); part = full + ".part"
+            rel = self.path_for(url, title); full = os.path.join(self.dir, rel); part = full + ".part"
             os.makedirs(os.path.dirname(full), exist_ok=True)
             got = 0
-            with upstream(url) as r, open(part, "wb") as f:
+            with upstream(source) as r, open(part, "wb") as f:
                 while True:
                     chunk = r.read(CHUNK)
                     if not chunk: break
@@ -173,7 +228,7 @@ class Cache:
                 os.remove(part); print(f"  cache: size mismatch for {rel} ({got} of {size})"); return
             os.replace(part, full)
             with self.lock:
-                self.entries[k] = {"url": url, "file": rel.replace("\\", "/"), "bytes": size, "added": time.time(), "lastUsed": time.time(), "complete": True}
+                self.entries[k] = {"url": url, "file": rel.replace("\\", "/"), "bytes": size, "added": time.time(), "lastUsed": time.time(), "complete": True, **({"title": title} if title else {})}
                 self.save()
             print(f"  cache: stored {rel} ({size/1e6:.1f} MB), {self.used()/1e9:.2f}/{self.cap/1e9:.1f} GB used")
         except Exception as e:
@@ -243,9 +298,13 @@ class Handler(SimpleHTTPRequestHandler):
         u = urllib.parse.urlparse(self.path)
         if not PROXY_ON and u.path.startswith("/proxy"): return self.send_error(404)
         if u.path == "/proxy": return self.proxy(u)
-        if u.path == "/proxy/info": return self.json({"proxy": True, "cache": cache.info() if cache else {"enabled": False}, "fetchOnPlay": bool(cache and cache.fetch_on_play), "stick": STICK})
+        if u.path == "/proxy/info": return self.json({"proxy": True, "cache": cache.info() if cache else {"enabled": False}, "fetchOnPlay": bool(cache and cache.fetch_on_play), "stick": STICK, "youtube": bool(YTDLP)})
+        if u.path == "/proxy/resolve":
+            url = urllib.parse.parse_qs(u.query).get("url", [""])[0]
+            info = resolve_youtube(url)
+            return self.json({k: v for k, v in info.items() if k != "url"})
         if u.path == "/proxy/list":
-            return self.json({"entries": [{"url": e["url"], "file": "cache/" + e["file"], "bytes": e["bytes"], "lastUsed": e.get("lastUsed")} for e in (cache.entries.values() if cache else []) if e.get("complete")]})
+            return self.json({"entries": [{"url": e["url"], "file": "cache/" + e["file"], "bytes": e["bytes"], "lastUsed": e.get("lastUsed"), "title": e.get("title")} for e in (cache.entries.values() if cache else []) if e.get("complete")]})
         return super().do_GET()
 
     def do_POST(self):
@@ -271,6 +330,11 @@ class Handler(SimpleHTTPRequestHandler):
     def proxy(self, u):
         url = urllib.parse.parse_qs(u.query).get("url", [""])[0]
         if not re.match(r"^https?://", url): self.send_error(400, "url must be http(s)"); return
+        source, title = url, None
+        if youtube_id(url):
+            info = resolve_youtube(url)
+            if "error" in info: self.send_error(502, f"YouTube: {info['error']}"); return
+            url, source, title = info["key"], info["url"], info["title"]
         if cache:
             local = cache.complete_file(url)
             if local:
@@ -279,10 +343,10 @@ class Handler(SimpleHTTPRequestHandler):
                     try: self.copyfile(f, self.wfile)
                     finally: f.close()
                 return
-            if cache.fetch_on_play: cache.fetch(url)
+            if cache.fetch_on_play: cache.fetch(url, source, title)
         rng = self.headers.get("Range")
         try:
-            r = upstream(url, rng)
+            r = upstream(source, rng)
         except Exception as e:
             self.send_error(502, f"upstream failed: {e}"); return
         with r:
@@ -308,6 +372,7 @@ if __name__ == "__main__":
     if not PROXY_ON: print("  proxy off")
     elif cache: print(f"  proxy on, cache {CACHE_DIR} ({cache.used()/1e9:.2f}/{CACHE_CAP/1e9:.1f} GB used, {cache.info()['count']} clips)")
     else: print("  proxy on, cache off")
+    if PROXY_ON: print(f"  youtube via {YTDLP}" if YTDLP else "  youtube off (no yt-dlp found)")
     if OPEN: threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try: srv.serve_forever()
     except KeyboardInterrupt: pass

@@ -21,6 +21,7 @@ Scenarios:
 - **crop** – the 4:3 bars button trims the pillarbox so cover differs from contain.
 - **proxy** – a Destockd stream goes through the local proxy and plays on WebGL, fetch on play
   stores the whole clip in the cache, a second play comes from the cache, the toggle reaches the server.
+- **youtube** – a YouTube link resolves through yt-dlp and plays on WebGL (skipped without yt-dlp).
 
 Why it is set up the way it is:
 

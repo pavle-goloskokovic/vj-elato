@@ -171,7 +171,25 @@ async def proxy(ctx, check, logs):
     info = json.load(urllib.request.urlopen(BASE + "proxy/info", timeout=10))
     check("fetch-on-play toggle reaches the server", info["fetchOnPlay"] is False)
 
-SCENARIOS = {"smoke": smoke, "reload": reload, "crop": crop, "proxy": proxy}
+YOUTUBE_TEST = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"     # Big Buck Bunny, Blender Foundation, CC-BY
+
+async def youtube(ctx, check, logs):
+    import urllib.request
+    info = json.load(urllib.request.urlopen(BASE + "proxy/info", timeout=10))
+    if not info.get("youtube"):
+        print("  skip: no yt-dlp on this machine"); return
+    player, ctrl = await open_pages(ctx, logs)
+    await ctrl.click(".tabs button[data-tab=url]"); await ctrl.select_option("#target-deck", "A")
+    await ctrl.fill("#url-input", YOUTUBE_TEST); await ctrl.click("#url-load")
+    await ctrl.wait_for_function("/p$|YouTube:/.test(document.querySelector('#url-status').textContent)", timeout=200000)
+    status = await ctrl.evaluate("document.querySelector('#url-status').textContent")
+    check("yt-dlp resolves the video (title and height shown)", "Big Buck Bunny" in status and status.endswith("p"), status)
+    await ctrl.wait_for_function(DECK_READY, arg="A", timeout=120000); await ctrl.wait_for_timeout(2500)
+    st = await ctrl.evaluate(PLAYER_STATUS)
+    check("YouTube video plays through the proxy on WebGL", st["decks"]["A"]["mode"] == "gl" and not st["decks"]["A"]["error"] and (st["decks"]["A"]["duration"] or 0) > 60, f"mode={st['decks']['A']['mode']} dur={st['decks']['A']['duration']} err={st['decks']['A']['error']}")
+    check("thumbnail comes from YouTube", "ytimg.com" in (await ctrl.evaluate("document.querySelector('.pane[data-pane=A] img').src")))
+
+SCENARIOS = {"smoke": smoke, "reload": reload, "crop": crop, "proxy": proxy, "youtube": youtube}
 
 async def run(names, keep):
     from playwright.async_api import async_playwright
@@ -211,7 +229,7 @@ def main():
     failed = []
     # smoke/reload/crop run against plain static hosting (as on GitHub Pages: no proxy),
     # the proxy scenario against the full local server
-    for flags, group in ((["--no-proxy"], [n for n in names if n != "proxy"]), (["--cache-gb", "1"], [n for n in names if n == "proxy"])):
+    for flags, group in ((["--no-proxy"], [n for n in names if n not in ("proxy", "youtube")]), (["--cache-gb", "1"], [n for n in names if n in ("proxy", "youtube")])):
         if not group: continue
         srv = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "serve.py"), str(PORT), site, "--no-browser", *flags], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
