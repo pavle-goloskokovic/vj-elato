@@ -11,6 +11,7 @@
   <header>
     <div class="brand">VJ Elato</div>
     <div id="player-status" class="pill off">no player</div>
+    <span id="net-status" class="pill off hidden" title="No network: catalog tabs show only what is on the stick">offline</span>
     <span id="gpu-status" class="muted"></span>
     <button id="open-player">Open player</button>
     <button id="pick-folder" title="Pick the folder with your clips (USB stick)">Clip folder…</button>
@@ -117,7 +118,7 @@
         <label>contrast <input type="range" data-param="contrast" min="0" max="3" step="0.05" value="1"><output></output></label>
         <label>brightness <input type="range" data-param="brightness" min="0" max="3" step="0.05" value="1"><output></output></label>
         <label>invert <input type="range" data-param="invert" min="0" max="1" step="0.01" value="0"><output></output></label>
-        <label><span>blur <small>css</small></span> <input type="range" data-param="blur" min="0" max="30" step="0.5" value="0"><output></output></label>
+        <label>blur <input type="range" data-param="blur" min="0" max="30" step="0.5" value="0"><output></output></label>
         <label>crop sides <input type="range" data-param="cropX" data-unit="%" min="0" max="0.3" step="0.005" value="0"><output></output></label>
         <label>crop top/btm <input type="range" data-param="cropY" data-unit="%" min="0" max="0.3" step="0.005" value="0"><output></output></label>
         <label>zoom <input type="range" data-param="zoom" min="0.25" max="4" step="0.01" value="1"><output></output></label>

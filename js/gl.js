@@ -29,7 +29,13 @@ uniform vec2 texSize, outSize;
 uniform float fitCover, zoom, rotate, hue, saturate, contrast, brightness, invert;
 uniform float pixelate, rgbShift, posterize, threshold;
 uniform vec2 crop;          // fraction trimmed from each side (x) and top/bottom (y): 0.125 removes 4:3 pillarbox bars
+uniform float blur;         // radius in output pixels; a 12-tap disc, cheap and good enough for a VJ blur
 uniform int mirror, kaleido;
+
+const vec2 TAPS[12] = vec2[](
+  vec2(-0.326, -0.406), vec2(-0.840, -0.074), vec2(-0.696, 0.457), vec2(-0.203, 0.621),
+  vec2(0.962, -0.195), vec2(0.473, -0.480), vec2(0.519, 0.767), vec2(0.185, -0.893),
+  vec2(0.507, 0.064), vec2(0.896, 0.412), vec2(-0.322, -0.933), vec2(-0.792, -0.598));
 
 const float PI = 3.14159265;
 
@@ -79,6 +85,13 @@ void main() {
     vec2 sh = vec2(rgbShift * 0.04, 0.0);
     c.r = sampleTex(t + sh).r;
     c.b = sampleTex(t - sh).b;
+  }
+  if (blur > 0.0) {
+    vec2 r = blur * 2.0 / outSize * s;          // output pixels -> picture uv, through the fit scale
+    vec4 acc = vec4(0.0);
+    for (int i = 0; i < 12; i++) acc += sampleTex(t + TAPS[i] * r);
+    acc /= 12.0;
+    c = vec4(mix(acc.rgb, c.rgb, 0.0), max(c.a, acc.a));
   }
   if (c.a <= 0.0) { o = vec4(0.0); return; }
 
@@ -267,6 +280,7 @@ export function createRenderer(canvas) {
     gl.uniform1f(u.posterize, params.posterize || 0);
     gl.uniform1f(u.threshold, params.threshold || 0);
     gl.uniform2f(u.crop, Math.min(0.45, params.cropX || 0), Math.min(0.45, params.cropY || 0));
+    gl.uniform1f(u.blur, params.blur || 0);
     gl.uniform1i(u.mirror, params.mirror || 0);
     gl.uniform1i(u.kaleido, params.kaleido || 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);

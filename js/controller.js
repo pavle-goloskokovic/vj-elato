@@ -42,7 +42,7 @@ const preview = new Stage({
     const rect = (el) => { const r = el.getBoundingClientRect(); return [Math.round((r.left - sr.left) * dpr), Math.round((r.top - sr.top) * dpr), Math.round(r.width * dpr), Math.round(r.height * dpr)]; };
     const out = rect(paneEls.out);
     // CSS-mode videos sit exactly over the output pane
-    for (const v of [$('#pvA'), $('#pvB')]) {
+    for (const v of strip.querySelectorAll('video')) {          // active and standby elements alike
       const r = paneEls.out.getBoundingClientRect();
       Object.assign(v.style, { left: (r.left - sr.left) + 'px', top: (r.top - sr.top) + 'px', width: r.width + 'px', height: r.height + 'px' });
     }
@@ -186,6 +186,18 @@ function loadPersisted() {
 
 // ---------- player link ----------
 const playerPill = $('#player-status'), gpuStatus = $('#gpu-status');
+
+// Offline awareness: the catalog tabs then list only what the stick holds, YouTube says so,
+// and the header shows it. Loads of streams still go through the safe load, which keeps the
+// current clip on screen when a source does not answer.
+state.online = navigator.onLine !== false;
+function setOnline(on) {
+  state.online = on;
+  $('#net-status').classList.toggle('hidden', on);
+  if (state.tab !== 'url') render();
+}
+window.addEventListener('online', () => setOnline(true));
+window.addEventListener('offline', () => setOnline(false));
 bus.on('hello', () => sendSync());
 bus.on('status', onStatus);
 bus.on('state', (m) => { adoptPlayerState(m); onStatus(m); });
@@ -213,10 +225,24 @@ function updateDeckStatus(name, s) {
   const scrub = $('.scrub', el);
   if (!scrub.matches(':active') && s.duration) scrub.value = Math.round((s.time / s.duration) * 1000);
   const badge = $('.badge', paneEls[name]);
-  if (s.error) { badge.textContent = s.error; badge.className = 'badge error'; }
+  // A clip we sent is "pending" until the player says it plays. The player keeps the previous
+  // clip on screen meanwhile; if the new one fails, fall back to the previous clip here too.
+  if (d.pendingClip) {
+    if (s.loading) { badge.textContent = 'loading ' + sourceLabel(d.source) + '…'; badge.className = 'badge'; }
+    else if (s.error && !(s.meta && s.meta.key === d.pendingClip.key)) {
+      const failed = d.pendingClip;
+      d.clip = d.prevClip; d.source = d.prevSource; d.pendingClip = null;
+      $('.title', deckEls[name]).textContent = d.clip ? d.clip.title : 'empty';
+      setPaneThumb(name, d.clip);
+      badge.textContent = `could not load "${failed.title}": ${s.error}`; badge.className = 'badge error';
+      persist();
+    } else if (s.meta && s.meta.key === d.pendingClip.key) { d.pendingClip = null; }
+  }
+  if (d.pendingClip) { /* badge already says loading */ }
+  else if (s.error) { badge.textContent = s.error; badge.className = 'badge error'; }
   else if (d.clip) {
     badge.className = 'badge';
-    badge.textContent = sourceLabel(d.source) + (s.paused ? ' · paused' : s.ready ? '' : ' · buffering');
+    badge.textContent = sourceLabel(d.source) + stallNote(d.clip, d.source) + (s.paused ? ' · paused' : s.ready ? '' : ' · buffering');
   } else badge.textContent = '';
   $('.mode', el).textContent = d.clip ? (s.mode === 'gl' ? 'webgl' : 'css only') : '';
   $('.mode', el).title = s.mode === 'gl' ? 'All effects available' : 'This source does not allow WebGL to read it (no CORS). Only the basic filters apply.';
@@ -228,11 +254,11 @@ function updateDeckStatus(name, s) {
   syncPreview(name, s);
 }
 
-// Grey out what cannot act: WebGL-only effects on a CSS deck, blur on a WebGL deck, the
-// feedback group when no deck is on WebGL, and the transport of an empty deck. Parameters
-// of an empty deck stay live so a deck can be preset before a clip is loaded.
+// Grey out what cannot act: WebGL-only effects on a CSS deck, the feedback group when no
+// deck is on WebGL, and the transport of an empty deck. Parameters of an empty deck stay
+// live so a deck can be preset before a clip is loaded. Everything the CSS path has
+// (blur included) also exists in the shader, so nothing is disabled on a WebGL deck.
 const GL_ONLY = new Set(['pixelate', 'rgbShift', 'posterize', 'threshold', 'mirror', 'kaleido']);
-const CSS_ONLY = new Set(['blur']);
 const FEEDBACK = new Set(['feedback', 'fbZoom', 'fbRotate', 'fbHue']);
 function setAvailable(input, on, why) {
   input.disabled = !on;
@@ -245,7 +271,6 @@ function updateAvailability(name, mode, anyGl, anyClip) {
   for (const input of $$('[data-param]', el)) {
     const k = input.dataset.param;
     if (GL_ONLY.has(k)) setAvailable(input, !loaded || mode === 'gl', 'Needs WebGL: this deck plays a stream the browser cannot read. Use a stick clip or the local server.');
-    else if (CSS_ONLY.has(k)) setAvailable(input, !loaded || mode !== 'gl', 'Blur is a CSS filter; on WebGL use pixelate or zoom.');
   }
   for (const b of $$('[data-cmd], .scrub', el)) b.disabled = !loaded;
   for (const input of $$('[data-master]')) if (FEEDBACK.has(input.dataset.master)) setAvailable(input, !anyClip || anyGl, 'Feedback needs a deck on WebGL.');
@@ -335,13 +360,15 @@ async function loadClip(name, clip) {
   const d = state.decks[name];
   const source = await resolveSource(clip);
   if (!source) { alert('This clip is not on the stick (or the folder is not connected) and has no URL.'); return; }
+  if (!d.pendingClip) { d.prevClip = d.clip; d.prevSource = d.source; }     // what the player keeps showing meanwhile
+  d.pendingClip = clip;
   d.clip = clip; d.source = source; d.playing = true; d.duration = 0; d.noSeek = false; d.seekAt = 0;
   bus.send('load', { deck: name, source, meta: clipMeta(clip) });
   if (state.live) preview.load(name, source, clipMeta(clip));
   $('.title', deckEls[name]).textContent = clip.title;
   setPaneThumb(name, clip);
   const badge = $('.badge', paneEls[name]);
-  badge.textContent = sourceLabel(source) + stallNote(clip, source); badge.className = 'badge';
+  badge.textContent = 'loading ' + sourceLabel(source) + '…'; badge.className = 'badge';
   persist();
 }
 // A proxied stream heavier than half the host's measured throughput may stall: warn on the badge.
@@ -455,11 +482,13 @@ function currentClips() {
     const seen = new Set();
     for (const c of it) {
       if (seen.has(c.key)) continue;
+      if (!state.online && !localEntry(c)) continue;                 // offline: only what the stick has
       if (!terms.length || match((c.film + ' ' + c.shot).toLowerCase())) { seen.add(c.key); out.push(c); if (out.length >= 600) break; }
     }
   } else if (state.tab === 'spelunkr' && cat) {
     const chans = f && f.startsWith('ch:') ? cat.spelunkr.channels.filter((c) => c.id === f.slice(3)) : cat.spelunkr.channels;
     for (const c of spelunkrAll({ ...cat.spelunkr, channels: chans })) {
+      if (!state.online && !localEntry(c)) continue;
       if (!terms.length || match(`${c.title} ${c.year || ''} ${c.channelName}`.toLowerCase())) { out.push(c); if (out.length >= 600) break; }
     }
   } else if (state.tab === 'youtube') {
@@ -536,8 +565,8 @@ function render() {
     results.innerHTML = `<div class="notice">${supportsFolders() ? 'Pick your clip folder with the button above. The browser remembers it.' : 'This browser cannot open folders. Use Chrome or Edge for the stick library; URL sources still work.'}</div>`;
     return;
   }
-  if (state.tab === 'youtube' && !clips.length) { results.innerHTML = `<div class="notice">${state.proxy && state.proxy.youtube ? 'Type a search above and press Enter.' : 'YouTube needs the local server with yt-dlp (run from the stick).'}</div>`; return; }
-  if (!clips.length) { results.innerHTML = '<div class="notice">Nothing matches.</div>'; return; }
+  if (state.tab === 'youtube' && !clips.length) { results.innerHTML = `<div class="notice">${!state.online ? 'Offline: YouTube is not reachable. Cached YouTube clips are in the Stick tab.' : state.proxy && state.proxy.youtube ? 'Type a search above and press Enter.' : 'YouTube needs the local server with yt-dlp (run from the stick).'}</div>`; return; }
+  if (!clips.length) { results.innerHTML = `<div class="notice">${!state.online && (state.tab === 'destockd' || state.tab === 'spelunkr') ? 'Offline: showing only clips that are on the stick, and none match.' : 'Nothing matches.'}</div>`; return; }
   const frag = document.createDocumentFragment();
   for (const c of clips) frag.appendChild(card(c));
   results.appendChild(frag);

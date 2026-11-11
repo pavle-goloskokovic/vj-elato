@@ -1,4 +1,4 @@
-// A stage is two <video> elements and a canvas that composites them. The
+// A stage is two decks of <video> elements and a canvas that composites them. The
 // player owns one filling the window; the controller owns one for its live
 // previews. Both run the same code, so what the controller shows is what the
 // projector gets.
@@ -7,6 +7,12 @@
 // the canvas with the full effect chain. A deck fed by a stream from a host
 // without CORS headers is left as a visible <video> layer with CSS filters:
 // video A sits under the canvas, video B above it.
+//
+// Safe loading: each deck has an active element and a standby one. A new clip
+// loads into the standby element while the current clip keeps playing, and the
+// two swap only once the new one reports it can play. A clip that fails or
+// times out leaves the current picture untouched and reports the error, so a
+// bad link never turns the projector black.
 
 import { createRenderer, crossfadeWeights } from './gl.js';
 
@@ -36,17 +42,20 @@ export function canUseGl(source) {
 }
 
 const cssBlend = (b) => (b === 'add' ? 'plus-lighter' : b);
+const LOAD_TIMEOUT = { file: 15000, url: 45000 };
 
 export class Stage {
-  // opts: { videos: {A, B}, canvas, layout: () => ({ canvas: [w, h], fbo: [w, h], panes: {out, A?, B?} }) }
+  // opts: { videos: {A, B}, canvas, layout: (stage) => ({ canvas: [w, h], fbo: [w, h], panes: {out, A?, B?} }), onEvent? }
   constructor(opts) {
-    this.videos = opts.videos;
+    this.videos = opts.videos;                      // the active element per deck
+    this.standby = {};                              // the element the next clip loads into
     this.canvas = opts.canvas;
     this.layoutFn = opts.layout;
+    this.onEvent = opts.onEvent || null;
     this.renderer = opts.canvas ? createRenderer(opts.canvas) : null;
     this.decks = {
-      A: { params: { ...DEFAULT_PARAMS }, meta: null, objectUrl: null, error: null, in: 0, out: null, mode: 'css' },
-      B: { params: { ...DEFAULT_PARAMS }, meta: null, objectUrl: null, error: null, in: 0, out: null, mode: 'css' },
+      A: { params: { ...DEFAULT_PARAMS }, meta: null, error: null, in: 0, out: null, skips: [], mode: 'css', pending: null, loadSeq: 0 },
+      B: { params: { ...DEFAULT_PARAMS }, meta: null, error: null, in: 0, out: null, skips: [], mode: 'css', pending: null, loadSeq: 0 },
     };
     this.master = { ...DEFAULT_MASTER };
     this.enabled = true;          // false = previews off: videos paused, nothing drawn
@@ -55,11 +64,9 @@ export class Stage {
     this._layout = null;
     for (const name of ['A', 'B']) {
       const v = this.videos[name];
-      v.muted = true; v.playsInline = true; v.preload = 'auto';
-      v.addEventListener('error', () => {
-        const e = v.error;
-        this.decks[name].error = e ? `media error ${e.code}${e.message ? ': ' + e.message : ''}` : 'media error';
-      });
+      this._prepElement(v);
+      this.standby[name] = this._makeStandby(v);
+      this._watchActive(name, v);
     }
     this._loopTimer = setInterval(() => this._checkOut(), 40);
     this.relayout();
@@ -67,6 +74,35 @@ export class Stage {
   }
 
   get info() { return this.renderer ? this.renderer.info : null; }
+  get elements() { return [...Object.values(this.videos), ...Object.values(this.standby)]; }
+
+  _prepElement(v) { v.muted = true; v.playsInline = true; v.preload = 'auto'; }
+  _makeStandby(v) {
+    const s = v.cloneNode(false);
+    s.removeAttribute('id'); s.removeAttribute('src');
+    s.dataset.standby = '1';
+    s.style.cssText = v.style.cssText;
+    s.style.zIndex = getComputedStyle(v).zIndex;
+    s.style.opacity = 0;
+    this._prepElement(s);
+    v.insertAdjacentElement('afterend', s);
+    return s;
+  }
+  // errors on the element that is on screen (a stream dying mid-play)
+  _watchActive(name, v) {
+    v.onerror = () => {
+      if (this.videos[name] !== v) return;
+      const e = v.error;
+      this.decks[name].error = e ? `media error ${e.code}${e.message ? ': ' + e.message : ''}` : 'media error';
+      if (this.onEvent) this.onEvent({ deck: name, type: 'error', why: this.decks[name].error });
+    };
+  }
+  _release(v) {
+    v.pause();
+    if (v._objectUrl) { URL.revokeObjectURL(v._objectUrl); v._objectUrl = null; }
+    v.removeAttribute('src'); v.load();
+    v.style.opacity = 0; v.style.visibility = '';
+  }
 
   relayout() {
     if (!this.renderer) return;
@@ -76,23 +112,54 @@ export class Stage {
     this.renderer.resize(l.fbo[0], l.fbo[1]);
   }
 
+  // Load into the standby element; swap in when it can play. meta: { title, in, out, skips, time, paused, ... }
   load(name, source, meta) {
-    const d = this.decks[name], v = this.videos[name];
-    if (d.objectUrl) { URL.revokeObjectURL(d.objectUrl); d.objectUrl = null; }
-    d.error = null; d.meta = meta || null;
-    d.in = (meta && meta.in) || 0; d.out = (meta && meta.out) || null;
-    d.skips = (meta && meta.skips) || [];          // [[start, end], ...] ranges to jump over (SponsorBlock)
-    d.mode = this.renderer && canUseGl(source) ? 'gl' : 'css';
-    v.pause();
-    v.removeAttribute('src');
-    if (d.mode === 'gl' && source.kind === 'url') v.crossOrigin = 'anonymous'; else v.removeAttribute('crossorigin');
-    if (source.kind === 'file') { d.objectUrl = URL.createObjectURL(source.file); v.src = d.objectUrl; }
-    else v.src = source.url;
-    v.load();
-    v.currentTime = (meta && meta.time) || d.in;
-    if (this.enabled && !(meta && meta.paused)) this.play(name);
-    this.applyCss(name);
+    const d = this.decks[name];
+    const nv = this.standby[name];
+    if (d.pending) { d.pending.cancel(); d.pending = null; }
+    const token = ++d.loadSeq;
+    this._release(nv);
+    const wantGl = !!this.renderer && canUseGl(source);
+    if (wantGl && source.kind === 'url') nv.crossOrigin = 'anonymous'; else nv.removeAttribute('crossorigin');
+    if (source.kind === 'file') { nv._objectUrl = URL.createObjectURL(source.file); nv.src = nv._objectUrl; }
+    else nv.src = source.url;
+    nv.load();
+    const startAt = (meta && meta.time) || (meta && meta.in) || 0;
+    if (startAt) nv.currentTime = startAt;
+    const finish = () => { clearTimeout(timer); nv.removeEventListener('canplay', onReady); nv.removeEventListener('error', onError); };
+    const fail = (why) => {
+      if (!d.pending || d.pending.token !== token) return;
+      finish(); d.pending = null; d.error = why; this._release(nv);
+      if (this.onEvent) this.onEvent({ deck: name, type: 'loadfail', why, meta });
+    };
+    const onReady = () => { if (d.pending && d.pending.token === token) { finish(); this._commit(name); } };
+    const onError = () => { const e = nv.error; fail(e ? `media error ${e.code}${e.message ? ': ' + e.message : ''}` : 'could not load'); };
+    const timer = setTimeout(() => fail('no data from the source (timed out)'), LOAD_TIMEOUT[source.kind] || LOAD_TIMEOUT.url);
+    nv.addEventListener('canplay', onReady);
+    nv.addEventListener('error', onError);
+    d.pending = { token, source, meta: meta || null, wantGl, el: nv, cancel: () => { finish(); this._release(nv); } };
+    if (nv.readyState >= 3) onReady();
   }
+
+  _commit(name) {
+    const d = this.decks[name], p = d.pending;
+    d.pending = null;
+    const old = this.videos[name], nv = p.el;
+    this.videos[name] = nv; this.standby[name] = old;
+    // the id (and with it the page's CSS rules and anyone's querySelector) follows the active element
+    const id = old.id; old.removeAttribute('id'); if (id) nv.id = id;
+    nv.dataset.standby = ''; old.dataset.standby = '1';
+    d.meta = p.meta; d.error = null; d.source = p.source;
+    d.in = (p.meta && p.meta.in) || 0; d.out = (p.meta && p.meta.out) || null;
+    d.skips = (p.meta && p.meta.skips) || [];
+    d.mode = p.wantGl ? 'gl' : 'css';
+    this._release(old);
+    this._watchActive(name, nv);
+    this.applyCss(name);
+    if (this.enabled && !(p.meta && p.meta.paused)) this.play(name); else nv.pause();
+    if (this.onEvent) this.onEvent({ deck: name, type: 'loaded', meta: p.meta });
+  }
+
   play(name) { const p = this.videos[name].play(); if (p) p.catch(() => {}); }
   pause(name) { this.videos[name].pause(); }
   restart(name) { this.videos[name].currentTime = this.decks[name].in; this.play(name); }
@@ -120,6 +187,7 @@ export class Stage {
       v.style.opacity = 0;
       v.style.filter = 'none';
       v.style.transform = 'none';
+      v.style.clipPath = '';
     } else {
       v.style.opacity = (p.opacity * mix).toFixed(3);
       v.style.filter = [
@@ -136,6 +204,7 @@ export class Stage {
       v.style.clipPath = cx || cy ? `inset(${cy * 100}% ${cx * 100}%)` : '';
       v.style.transform = `scale(${(p.zoom || 1) * k}) rotate(${p.rotate || 0}deg)`;
     }
+    this.standby[name].style.opacity = 0;
     v.playbackRate = p.speed;
     v.loop = p.loop && !d.out;
     v.classList.toggle('cover', p.fit === 'cover');
@@ -202,6 +271,7 @@ export class Stage {
       decks[name] = {
         time: v.currentTime, duration: isFinite(v.duration) ? v.duration : null,
         paused: v.paused, ready: v.readyState >= 2, error: d.error, mode: d.mode,
+        loading: d.pending ? (d.pending.meta && d.pending.meta.key) || true : null,
         meta: d.meta, params: d.params,
       };
     }

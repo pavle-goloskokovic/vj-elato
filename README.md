@@ -17,9 +17,13 @@ A two-tab browser VJ tool. One tab is the **player** (goes on the projector), th
 
 ## Effects
 
-Local clips are composited in WebGL2: per deck crop (Destockd clips carry a 4:3 picture inside a 16:9 frame; the **4:3 bars** button trims it so cover and zoom work on the real picture), zoom, rotate, mirror, kaleidoscope, pixelate, RGB shift, posterize, threshold plus the colour controls, and on the master a feedback trail (decay, zoom, rotate, hue drift) and a strobe. The internal render size is adjustable (50/75/100 % of the window) for weaker GPUs.
+Local clips are composited in WebGL2: per deck crop (Destockd clips carry a 4:3 picture inside a 16:9 frame; the **4:3 bars** button trims it so cover and zoom work on the real picture), zoom, rotate, mirror, kaleidoscope, pixelate, RGB shift, posterize, threshold, blur, plus the colour controls, and on the master a feedback trail (decay, zoom, rotate, hue drift) and a strobe. The internal render size is adjustable (50/75/100 % of the window) for weaker GPUs.
 
-Streamed clips cannot be read by WebGL: neither Destockd's CDN nor archive.org's storage nodes send CORS headers on video, so a streamed deck is drawn as a plain `<video>` layer with CSS filters (hue, saturation, contrast, brightness, invert, blur, zoom, rotate, blend mode). The controller shows `webgl` or `css only` next to each deck. Put the clips you want to bend on the stick.
+Streamed clips cannot be read by WebGL on the web version: neither Destockd's CDN nor archive.org's storage nodes send CORS headers on video, so a streamed deck is drawn as a plain `<video>` layer with CSS filters (hue, saturation, contrast, brightness, invert, blur, zoom, rotate, crop, blend mode, strobe). The controls that only the shader can do are greyed out on such a deck. Run from the stick, the local proxy lifts this. The controller shows `webgl` or `css only` next to each deck.
+
+**Safe loading.** A new clip loads into a hidden standby element while the current one keeps playing, and the two swap only once the new one can play. A source that fails or does not answer within 45 s (15 s for a local file) leaves the picture untouched, the controller falls back to the previous clip and shows the reason. The same applies to the controller's previews. **Offline**, the catalog tabs list only what the stick holds, the YouTube tab says so, and the header shows it.
+
+**Web version versus stick.** On GitHub Pages everything that the browser alone can do is there: local clips from a picked folder (Chrome and Edge), their thumbnails and collections, the full effect chain on local clips, streams from Destockd and archive.org as CSS layers. What needs the local server is what the browser forbids: effects on streams (CORS), YouTube (yt-dlp), the cache, link measurement, and a library without a folder picker.
 
 Keys on the controller: `1`/`2` play-pause A/B, `←`/`→` crossfader, `B` blackout. On the player: `F` fullscreen, `H` hide the overlay, `B` blackout.
 
