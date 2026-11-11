@@ -6,3 +6,4 @@ Thumbs.db
 dist/
 tests/_site/
 tests/_out/
+cache/

@@ -19,6 +19,8 @@ Scenarios:
 - **reload** – reloading the controller restores clips and settings, leaves the player
   playing and resumes the previews in sync; reloading the player resumes where it was.
 - **crop** – the 4:3 bars button trims the pillarbox so cover differs from contain.
+- **proxy** – a Destockd stream goes through the local proxy and plays on WebGL, fetch on play
+  stores the whole clip in the cache, a second play comes from the cache, the toggle reaches the server.
 
 Why it is set up the way it is:
 

@@ -1,15 +1,196 @@
-"""Static file server with HTTP Range support, so <video> can seek.
+"""VJ Elato local server: static files with byte ranges, plus a video proxy with a cache.
 
-usage: python serve.py [port] [folder] [--no-browser]     default: the folder this file is in
+usage: python serve.py [port] [folder] [--no-browser] [--cache-gb N] [--reserve-mb N] [--cache-dir DIR] [--no-cache] [--no-proxy]
+  default folder: the one this file is in (the portable copy on the stick)
+
+Why a proxy: the browser may display a video from any host, but WebGL may only read
+pixels from a same-origin or CORS-enabled source, and neither Destockd's CDN nor
+archive.org's storage nodes send CORS headers. Served through this proxy the video is
+same-origin, so the player can run it through the full effect chain.
+
+  GET  /proxy?url=<encoded video url>   streams the video (Range requests are passed
+                                         upstream); served from the cache once complete
+  GET  /proxy/info                       {proxy, cache:{used, cap, count, ...}, fetchOnPlay}
+  GET  /proxy/list                       cache entries (url -> file relative to the stick root)
+  POST /proxy/settings  {"fetchOnPlay": bool}
+  POST /proxy/clear
+
+The cache lives in <stick root>/cache (the parent of the vj-elato folder), capped at
+--cache-gb (default 2) and never eating into --reserve-mb (default 500) of free space.
+With fetch-on-play, the first play of a stream also downloads the whole file in the
+background; a file is listed as cached only once complete. Least recently used clips
+are removed to make room. Only files this proxy wrote are ever deleted.
 """
-import os, re, sys, webbrowser, threading
+import hashlib, json, os, re, shutil, ssl, sys, threading, time, urllib.parse, urllib.request, webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
+def opt(name, default):
+    if name in sys.argv:
+        i = sys.argv.index(name); return sys.argv[i + 1] if i + 1 < len(sys.argv) else default
+    return default
 ROOT = os.path.abspath(ARGS[1]) if len(ARGS) > 1 else os.path.dirname(os.path.abspath(__file__))
 PORT = int(ARGS[0]) if ARGS else 8765
 OPEN = "--no-browser" not in sys.argv
+STICK = os.path.dirname(ROOT) if os.path.basename(ROOT).lower() == "vj-elato" else ROOT
+CACHE_DIR = os.path.abspath(opt("--cache-dir", os.path.join(STICK, "cache")))
+CACHE_CAP = int(float(opt("--cache-gb", "2")) * 1e9)
+RESERVE = int(float(opt("--reserve-mb", "500")) * 1e6)
+CACHE_ON = "--no-cache" not in sys.argv
+PROXY_ON = "--no-proxy" not in sys.argv          # off = behave like plain static hosting (GitHub Pages)
+UA = "vj-elato local proxy"
+CHUNK = 256 * 1024
 
+# ---------- upstream ----------
+_ssl_ctx = None
+def ssl_context():
+    """Verified TLS; if the local certificate store is unusable (it is on some Windows
+    machines) fall back to unverified with a warning, since this only fetches public video."""
+    global _ssl_ctx
+    if _ssl_ctx is None:
+        try:
+            ctx = ssl.create_default_context()
+            ctx.load_default_certs()
+            _ssl_ctx = ctx
+        except Exception as e:
+            print(f"  warning: TLS verification unavailable ({e}); fetching without verification")
+            _ssl_ctx = ssl._create_unverified_context()
+    return _ssl_ctx
+
+def upstream(url, rng=None, method="GET"):
+    if not re.match(r"^https?://", url): raise ValueError("only http(s) urls")
+    req = urllib.request.Request(url, method=method, headers={"User-Agent": UA, **({"Range": rng} if rng else {})})
+    return urllib.request.urlopen(req, timeout=30, context=ssl_context())
+
+def upstream_size(url):
+    try:
+        with upstream(url, "bytes=0-0") as r:
+            cr = r.headers.get("Content-Range")
+            if cr and "/" in cr: return int(cr.rsplit("/", 1)[1])
+            cl = r.headers.get("Content-Length")
+            return int(cl) if cl and r.status == 200 else None
+    except Exception:
+        return None
+
+# ---------- cache ----------
+class Cache:
+    def __init__(self, folder, cap, reserve):
+        self.dir, self.cap, self.reserve = folder, cap, reserve
+        self.lock = threading.RLock()
+        self.index_path = os.path.join(folder, "index.json")
+        self.entries = {}
+        self.fetching = {}           # key -> thread
+        self.fetch_on_play = True
+        os.makedirs(folder, exist_ok=True)
+        try:
+            self.entries = json.load(open(self.index_path, encoding="utf-8")).get("entries", {})
+        except Exception:
+            self.entries = {}
+        # drop entries whose files are gone, and stale .part files
+        for k, e in list(self.entries.items()):
+            if not os.path.isfile(os.path.join(folder, e["file"])): del self.entries[k]
+        for r, _, fs in os.walk(folder):
+            for f in fs:
+                if f.endswith(".part"):
+                    try: os.remove(os.path.join(r, f))
+                    except OSError: pass
+        self.save()
+
+    @staticmethod
+    def key(url): return hashlib.sha1(url.encode()).hexdigest()[:16]
+
+    def save(self):
+        with self.lock:
+            tmp = self.index_path + ".tmp"
+            json.dump({"entries": self.entries, "saved": time.time()}, open(tmp, "w", encoding="utf-8"), indent=1)
+            os.replace(tmp, self.index_path)
+
+    def used(self): return sum(e["bytes"] for e in self.entries.values() if e.get("complete"))
+
+    def info(self):
+        with self.lock:
+            return {"enabled": True, "dir": self.dir, "cap": self.cap, "reserve": self.reserve, "used": self.used(),
+                    "count": sum(1 for e in self.entries.values() if e.get("complete")), "fetching": len(self.fetching),
+                    "free": shutil.disk_usage(self.dir).free}
+
+    def path_for(self, url):
+        p = urllib.parse.urlparse(url)
+        name = urllib.parse.unquote(p.path.rsplit("/", 1)[-1]) or "video"
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name)[:80]
+        base, ext = os.path.splitext(name)
+        ext = ext if ext.lower() in (".mp4", ".m4v", ".webm", ".mov", ".mkv", ".ogv") else ".mp4"
+        host = re.sub(r"[^a-z0-9.-]", "_", p.hostname or "host")
+        return os.path.join(host, f"{base}-{self.key(url)[:8]}{ext}")
+
+    def complete_file(self, url):
+        with self.lock:
+            e = self.entries.get(self.key(url))
+            if e and e.get("complete"):
+                e["lastUsed"] = time.time(); self.save()
+                return os.path.join(self.dir, e["file"])
+        return None
+
+    def make_room(self, size):
+        """Evict least recently used complete clips until `size` fits under the cap and
+        the disk keeps its reserve. Returns False if it cannot fit at all."""
+        if size > self.cap: return False
+        with self.lock:
+            victims = sorted((e for e in self.entries.values() if e.get("complete")), key=lambda e: e.get("lastUsed") or e.get("added") or 0)
+            def fits():
+                return self.used() + size <= self.cap and shutil.disk_usage(self.dir).free - size >= self.reserve
+            while not fits() and victims:
+                v = victims.pop(0)
+                try: os.remove(os.path.join(self.dir, v["file"]))
+                except OSError: pass
+                self.entries = {k: e for k, e in self.entries.items() if e is not v}
+                print(f"  cache: evicted {v['file']}")
+            self.save()
+            return fits()
+
+    def fetch(self, url):
+        """Download the whole file in the background (once per url)."""
+        k = self.key(url)
+        with self.lock:
+            if k in self.fetching or (k in self.entries and self.entries[k].get("complete")): return
+            t = threading.Thread(target=self._fetch, args=(url, k), daemon=True)
+            self.fetching[k] = t
+        t.start()
+
+    def _fetch(self, url, k):
+        try:
+            size = upstream_size(url)
+            if not size or not self.make_room(size):
+                print(f"  cache: not caching {url[:60]} ({'unknown size' if not size else 'no room'})"); return
+            rel = self.path_for(url); full = os.path.join(self.dir, rel); part = full + ".part"
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            got = 0
+            with upstream(url) as r, open(part, "wb") as f:
+                while True:
+                    chunk = r.read(CHUNK)
+                    if not chunk: break
+                    f.write(chunk); got += len(chunk)
+            if got != size:
+                os.remove(part); print(f"  cache: size mismatch for {rel} ({got} of {size})"); return
+            os.replace(part, full)
+            with self.lock:
+                self.entries[k] = {"url": url, "file": rel.replace("\\", "/"), "bytes": size, "added": time.time(), "lastUsed": time.time(), "complete": True}
+                self.save()
+            print(f"  cache: stored {rel} ({size/1e6:.1f} MB), {self.used()/1e9:.2f}/{self.cap/1e9:.1f} GB used")
+        except Exception as e:
+            print(f"  cache: fetch failed for {url[:60]}: {e}")
+        finally:
+            with self.lock: self.fetching.pop(k, None)
+
+    def clear(self):
+        with self.lock:
+            for e in self.entries.values():
+                try: os.remove(os.path.join(self.dir, e["file"]))
+                except OSError: pass
+            self.entries = {}; self.save()
+
+cache = Cache(CACHE_DIR, CACHE_CAP, RESERVE) if (CACHE_ON and PROXY_ON) else None
+
+# ---------- handler ----------
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **k): super().__init__(*a, directory=ROOT, **k)
     def log_message(self, *a): pass
@@ -17,10 +198,23 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Cache-Control", "no-cache")
         super().end_headers()
+
+    # --- static files with Range ---
     def send_head(self):
         path = self.translate_path(self.path)
+        return self.send_file_head(path)
+
+    def send_file_head(self, path):
         m = re.match(r"bytes=(\d*)-(\d*)", self.headers.get("Range", ""))
-        if not m or os.path.isdir(path) or not os.path.isfile(path): return super().send_head()
+        if not m or os.path.isdir(path) or not os.path.isfile(path):
+            if path != self.translate_path(self.path):          # a cache file: serve whole
+                f = open(path, "rb")
+                self.send_response(200)
+                self.send_header("Content-Type", self.guess_type(path))
+                self.send_header("Content-Length", str(os.path.getsize(path)))
+                self.end_headers()
+                return f
+            return super().send_head()
         size = os.path.getsize(path)
         if m.group(1): start = int(m.group(1)); end = int(m.group(2)) if m.group(2) else size - 1
         else: start = max(0, size - int(m.group(2))); end = size - 1
@@ -34,19 +228,86 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self._remaining = end - start + 1
         return f
+
     def copyfile(self, src, dst):
         n = getattr(self, "_remaining", None)
         if n is None: return super().copyfile(src, dst)
         while n > 0:
-            chunk = src.read(min(65536, n))
+            chunk = src.read(min(CHUNK, n))
             if not chunk: break
             dst.write(chunk); n -= len(chunk)
         self._remaining = None
 
+    # --- proxy ---
+    def do_GET(self):
+        u = urllib.parse.urlparse(self.path)
+        if not PROXY_ON and u.path.startswith("/proxy"): return self.send_error(404)
+        if u.path == "/proxy": return self.proxy(u)
+        if u.path == "/proxy/info": return self.json({"proxy": True, "cache": cache.info() if cache else {"enabled": False}, "fetchOnPlay": bool(cache and cache.fetch_on_play), "stick": STICK})
+        if u.path == "/proxy/list":
+            return self.json({"entries": [{"url": e["url"], "file": "cache/" + e["file"], "bytes": e["bytes"], "lastUsed": e.get("lastUsed")} for e in (cache.entries.values() if cache else []) if e.get("complete")]})
+        return super().do_GET()
+
+    def do_POST(self):
+        u = urllib.parse.urlparse(self.path)
+        body = self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}"
+        if u.path == "/proxy/settings" and cache:
+            try: data = json.loads(body)
+            except Exception: data = {}
+            if "fetchOnPlay" in data: cache.fetch_on_play = bool(data["fetchOnPlay"])
+            return self.json({"fetchOnPlay": cache.fetch_on_play})
+        if u.path == "/proxy/clear" and cache:
+            cache.clear(); return self.json({"cleared": True, "cache": cache.info()})
+        self.send_error(404)
+
+    def json(self, obj):
+        data = json.dumps(obj).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers(); self.wfile.write(data)
+
+    def proxy(self, u):
+        url = urllib.parse.parse_qs(u.query).get("url", [""])[0]
+        if not re.match(r"^https?://", url): self.send_error(400, "url must be http(s)"); return
+        if cache:
+            local = cache.complete_file(url)
+            if local:
+                f = self.send_file_head(local)
+                if f:
+                    try: self.copyfile(f, self.wfile)
+                    finally: f.close()
+                return
+            if cache.fetch_on_play: cache.fetch(url)
+        rng = self.headers.get("Range")
+        try:
+            r = upstream(url, rng)
+        except Exception as e:
+            self.send_error(502, f"upstream failed: {e}"); return
+        with r:
+            self.send_response(r.status)
+            for h in ("Content-Type", "Content-Length", "Content-Range", "Last-Modified", "ETag"):
+                v = r.headers.get(h)
+                if v: self.send_header(h, v)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            try:
+                while True:
+                    chunk = r.read(CHUNK)
+                    if not chunk: break
+                    self.wfile.write(chunk)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass                                   # the browser moved on, normal for video
+
 if __name__ == "__main__":
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    srv.daemon_threads = True
     url = f"http://localhost:{PORT}/"
     print(f"VJ Elato: serving {ROOT}\n  {url}   (Ctrl+C to stop)")
+    if not PROXY_ON: print("  proxy off")
+    elif cache: print(f"  proxy on, cache {CACHE_DIR} ({cache.used()/1e9:.2f}/{CACHE_CAP/1e9:.1f} GB used, {cache.info()['count']} clips)")
+    else: print("  proxy on, cache off")
     if OPEN: threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try: srv.serve_forever()
     except KeyboardInterrupt: pass

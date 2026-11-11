@@ -143,7 +143,35 @@ async def crop(ctx, check, logs):
     check("4:3 bars button sets 12.5 % side crop", (await ctrl.evaluate("document.querySelector('.deck[data-deck=A] [data-param=cropX]').parentElement.querySelector('output').value")) == "12.5%")
     check("cover differs from contain once bars are cropped", diff(contain, cover) > 10, diff(contain, cover))
 
-SCENARIOS = {"smoke": smoke, "reload": reload, "crop": crop}
+async def proxy(ctx, check, logs):
+    import urllib.request
+    info = json.load(urllib.request.urlopen(BASE + "proxy/info", timeout=10))
+    check("server advertises the proxy", info.get("proxy") is True and info["cache"]["enabled"], info.get("cache"))
+    player, ctrl = await open_pages(ctx, logs)
+    check("controller shows the proxy status", await ctrl.evaluate("!document.querySelector('#proxy-status').classList.contains('hidden')"))
+    await load_url(ctrl, "A", DESTOCKD_STREAM); await ctrl.wait_for_timeout(2500)
+    st = await ctrl.evaluate(PLAYER_STATUS)
+    badge = await ctrl.evaluate("document.querySelector('.pane[data-pane=A] .badge').textContent")
+    check("Destockd stream through the proxy plays on WebGL", st["decks"]["A"]["mode"] == "gl" and not st["decks"]["A"]["error"] and (st["decks"]["A"]["duration"] or 0) > 1, f"mode={st['decks']['A']['mode']} badge={badge}")
+    cached = None
+    for _ in range(40):
+        lst = json.load(urllib.request.urlopen(BASE + "proxy/list", timeout=10))["entries"]
+        cached = next((e for e in lst if e["url"] == DESTOCKD_STREAM), None)
+        if cached: break
+        await ctrl.wait_for_timeout(1500)
+    site = os.path.join(SITE, "vj-elato")
+    on_disk = cached and os.path.getsize(os.path.join(SITE, cached["file"])) == cached["bytes"]
+    check("fetch on play cached the whole clip on the stick", bool(cached) and on_disk, cached and f"{cached['file']} {cached['bytes']} bytes")
+    info = json.load(urllib.request.urlopen(BASE + "proxy/info", timeout=10))
+    check("cache usage is reported", info["cache"]["used"] > 0 and info["cache"]["count"] >= 1, f"{info['cache']['used']} bytes, {info['cache']['count']} clips")
+    await load_url(ctrl, "B", DESTOCKD_STREAM); await ctrl.wait_for_timeout(1500)
+    st = await ctrl.evaluate(PLAYER_STATUS)
+    check("second play is served from the cache and still WebGL", st["decks"]["B"]["mode"] == "gl" and (st["decks"]["B"]["duration"] or 0) > 1)
+    await ctrl.evaluate("fetch('proxy/settings', {method:'POST', body: JSON.stringify({fetchOnPlay:false})})"); await ctrl.wait_for_timeout(500)
+    info = json.load(urllib.request.urlopen(BASE + "proxy/info", timeout=10))
+    check("fetch-on-play toggle reaches the server", info["fetchOnPlay"] is False)
+
+SCENARIOS = {"smoke": smoke, "reload": reload, "crop": crop, "proxy": proxy}
 
 async def run(names, keep):
     from playwright.async_api import async_playwright
@@ -163,7 +191,7 @@ async def run(names, keep):
                     await ctx.close()
         finally:
             await browser.close()
-    problems = [l for l in logs if l[1] in ("error", "pageerror")]
+    problems = [l for l in logs if l[1] in ("error", "pageerror") and "proxy/info" not in l[2] and "404" not in l[2]]   # the proxy probe 404s on a static server, by design
     check("no console errors or page errors", not problems, problems[:3])
     return check.failed
 
@@ -179,14 +207,20 @@ def main():
     site = os.path.join(SITE, "vj-elato")
     shutil.copy(clip, os.path.join(site, "test.mp4"))
     print(f"site: {site}\nclip: {clip}")
-    srv = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "serve.py"), str(PORT), site, "--no-browser"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    try:
-        time.sleep(1.5)
-        names = list(SCENARIOS) if a.scenario == "all" else [a.scenario]
-        failed = asyncio.run(run(names, a.keep))
-    finally:
-        srv.terminate()
-        if not a.keep: shutil.rmtree(SITE, ignore_errors=True)
+    names = list(SCENARIOS) if a.scenario == "all" else [a.scenario]
+    failed = []
+    # smoke/reload/crop run against plain static hosting (as on GitHub Pages: no proxy),
+    # the proxy scenario against the full local server
+    for flags, group in ((["--no-proxy"], [n for n in names if n != "proxy"]), (["--cache-gb", "1"], [n for n in names if n == "proxy"])):
+        if not group: continue
+        srv = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "serve.py"), str(PORT), site, "--no-browser", *flags], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            time.sleep(1.5)
+            print(f"server flags: {' '.join(flags)}")
+            failed += asyncio.run(run(group, a.keep))
+        finally:
+            srv.terminate(); srv.wait(timeout=10); time.sleep(0.5)
+    if not a.keep: shutil.rmtree(SITE, ignore_errors=True)
     print("\n" + ("ALL PASSED" if not failed else f"FAILED: {', '.join(failed)}"))
     sys.exit(1 if failed else 0)
 

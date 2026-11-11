@@ -25,7 +25,13 @@ Keys on the controller: `1`/`2` play-pause A/B, `←`/`→` crossfader, `B` blac
 
 ## Offline and portable
 
-`python tools/make_portable.py F:\` copies the tool to `F:j-elato\` on a stick. There, `serve.cmd` (Windows: Python if present, otherwise a pure PowerShell server) or `serve.sh` (macOS, Linux) serves it on `http://localhost:8765/` and opens the browser. Nothing is installed. Both tabs must share an origin, which is why a server is needed; plain `file://` pages cannot talk to each other.
+`python tools/make_portable.py F:\` copies the tool to `F:j-elato\` on a stick, including the official embeddable Python for Windows (10 MB, no installer), so `serve.cmd` works on any Windows laptop; `serve.sh` uses the python3 that macOS and Linux ship. The server listens on `http://localhost:8765/` and opens the browser. Nothing is installed. Both tabs must share an origin, which is why a server is needed; plain `file://` pages cannot talk to each other.
+
+### Proxy and cache
+
+The local server also proxies video (`/proxy?url=…`). Served through it a stream is same-origin, so the browser lets WebGL read it and Destockd and archive.org clips get the full effect chain whenever the laptop has internet. The controller detects the proxy and routes streams through it on its own; on GitHub Pages there is no proxy and streams stay on the CSS layer.
+
+With **fetch on play** (default on, toggle in the header) the first play of a stream also downloads the whole file to `<stick>\cache\`. A clip is listed only once complete. The cache is capped at 2 GB (`--cache-gb`) and keeps 500 MB of the stick free (`--reserve-mb`); least recently used clips are removed to make room, and only files the proxy wrote are ever deleted. Cached clips show up in the Stick tab, carry the `stick` badge in the catalogs and play offline like any other local clip.
 
 With the stick as clip folder everything local works without internet: clips, their thumbnails (the `.jpg` next to each clip, or a frame grabbed from the video and cached), effects, and collections. Only the Destockd and Spelunkr catalogs' hotlinked thumbnails and streams need a connection.
 
@@ -42,7 +48,7 @@ The Stick tab's filter lists, besides every file: your own collections from `vj-
 | | |
 |---|---|
 | `index.html`, `player.html`, `controller.html`, `css/`, `js/`, `catalog/` | the tool; this is all that gets published |
-| `tools/` | catalog build, Destockd download, local servers, portable copy |
+| `tools/` | catalog build, Destockd download, local server with proxy and cache, portable copy |
 | `data/catalog-scan/` | raw scan of Destockd and Spelunkr, 2026-11-09 |
 | `tests/` | browser tests, see `tests/README.md` |
 | `.github/workflows/pages.yml` | stages the runtime files with `make_portable.py`, deploys them to GitHub Pages and keeps a zip as a workflow artifact |

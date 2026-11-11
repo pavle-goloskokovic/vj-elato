@@ -25,6 +25,7 @@ const state = {
   lastStatus: 0,
   playerHasState: false,  // true once a live player has told us what it holds
   playerNeedsSync: false, // we synced a player while some clip's file was not yet reachable
+  proxy: null,            // info from the local server's /proxy/info, when we run from it
 };
 
 // ---------- live preview stage ----------
@@ -213,7 +214,7 @@ function updateDeckStatus(name, s) {
   if (s.error) { badge.textContent = s.error; badge.className = 'badge error'; }
   else if (d.clip) {
     badge.className = 'badge';
-    badge.textContent = (d.source && d.source.kind === 'file' ? 'stick' : 'stream') + (s.paused ? ' · paused' : s.ready ? '' : ' · buffering');
+    badge.textContent = sourceLabel(d.source) + (s.paused ? ' · paused' : s.ready ? '' : ' · buffering');
   } else badge.textContent = '';
   $('.mode', el).textContent = d.clip ? (s.mode === 'gl' ? 'webgl' : 'css only') : '';
   $('.mode', el).title = s.mode === 'gl' ? 'All effects available' : 'This source does not allow WebGL to read it (no CORS). Only the basic filters apply.';
@@ -294,9 +295,11 @@ async function resolveSource(clip) {
     try { return { kind: 'file', file: await getFile(local) }; }
     catch (e) { console.warn('local file failed, falling back to URL', e); }
   }
+  if (clip.url && state.proxy) return { kind: 'url', url: proxyUrl(clip.url), via: 'proxy' };
   if (clip.url) return { kind: 'url', url: clip.url };
   return null;
 }
+const proxyUrl = (u) => new URL('proxy?url=' + encodeURIComponent(u), location.href).href;
 
 async function loadClip(name, clip) {
   const d = state.decks[name];
@@ -308,9 +311,10 @@ async function loadClip(name, clip) {
   $('.title', deckEls[name]).textContent = clip.title;
   setPaneThumb(name, clip);
   const badge = $('.badge', paneEls[name]);
-  badge.textContent = source.kind === 'file' ? 'stick' : 'stream'; badge.className = 'badge';
+  badge.textContent = sourceLabel(source); badge.className = 'badge';
   persist();
 }
+const sourceLabel = (src) => !src ? '' : src.kind === 'file' ? 'stick' : src.via === 'proxy' ? 'proxy' : 'stream';
 
 // After a restore: feed the preview stage, and the player where it needs it.
 // A clip that was reachable only as a stream (folder not yet reconnected)
@@ -321,7 +325,7 @@ async function loadPreviews(syncPlayer) {
   for (const name of ['A', 'B']) {
     const d = state.decks[name];
     if (!d.clip) continue;
-    const hadStream = d.source && d.source.kind === 'url';
+    const hadStream = d.source && d.source.kind === 'url' && d.source.via !== 'proxy';
     if (!d.source || (hadStream && state.library)) {
       const src = await resolveSource(d.clip);
       if (!src || (hadStream && src.kind === 'url')) continue;      // nothing new
@@ -329,7 +333,7 @@ async function loadPreviews(syncPlayer) {
       if (hadStream && state.playerHasState) bus.send('load', { deck: name, source: src, meta: { ...clipMeta(d.clip), time: d.lastTime || 0, paused: !d.playing } });
     }
     if (d.source && state.live) preview.load(name, d.source, { ...clipMeta(d.clip), time: d.lastTime || 0, paused: !d.playing });
-    $('.badge', paneEls[name]).textContent = d.source.kind === 'file' ? 'stick' : 'stream';
+    $('.badge', paneEls[name]).textContent = sourceLabel(d.source);
     setPaneThumb(name, d.clip);
   }
   if (syncPlayer && changed && state.playerNeedsSync) sendSync();
@@ -556,6 +560,41 @@ async function restoreLibrary() {
   folderStatus.appendChild(b);
 }
 
+// ---------- local proxy (only when served by tools/serve.py) ----------
+const proxyBox = $('#proxy-status');
+async function probeProxy() {
+  // only a local server can carry the proxy; skip the probe (and its 404) on GitHub Pages
+  if (!/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) { state.proxy = null; renderProxy(); return; }
+  try {
+    const r = await fetch(new URL('proxy/info', location.href), { cache: 'no-store' });
+    const info = r.ok ? await r.json() : null;
+    state.proxy = info && info.proxy ? info : null;
+  } catch { state.proxy = null; }
+  renderProxy();
+  if (state.proxy) setInterval(refreshProxy, 10000);
+}
+async function refreshProxy() {
+  try { const r = await fetch(new URL('proxy/info', location.href), { cache: 'no-store' }); if (r.ok) { state.proxy = await r.json(); renderProxy(); } } catch { /* keep last */ }
+}
+function renderProxy() {
+  const p = state.proxy;
+  if (!p) { proxyBox.classList.add('hidden'); return; }
+  proxyBox.classList.remove('hidden');
+  const c = p.cache || {};
+  $('#proxy-cache', proxyBox).textContent = c.enabled ? `cache ${fmtBytes(c.used)} / ${fmtBytes(c.cap)} · ${c.count} clips${c.fetching ? ` · fetching ${c.fetching}` : ''}` : 'cache off';
+  $('#fetch-on-play', proxyBox).checked = !!p.fetchOnPlay;
+}
+$('#fetch-on-play').addEventListener('change', async (e) => {
+  try { await fetch(new URL('proxy/settings', location.href), { method: 'POST', body: JSON.stringify({ fetchOnPlay: e.target.checked }) }); } catch { /* ignore */ }
+  refreshProxy();
+});
+$('#clear-cache').addEventListener('click', async () => {
+  if (!confirm('Delete every clip the proxy cached on the stick?')) return;
+  try { await fetch(new URL('proxy/clear', location.href), { method: 'POST' }); } catch { /* ignore */ }
+  refreshProxy();
+  if (state.library) await useFolder(state.library.handle);
+});
+
 // ---------- boot ----------
 function debounce(fn, ms) { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; }
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -567,6 +606,7 @@ function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&am
     results.innerHTML = `<div class="notice">Could not load catalogs: ${escapeHtml(e.message)}. Serve the folder over http, not file://.</div>`;
   }
   setTab('destockd');
+  await probeProxy();
 
   // Restore: prefer what a running player holds; otherwise our last saved state.
   const saved = loadPersisted();

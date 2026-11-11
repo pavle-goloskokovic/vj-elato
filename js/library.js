@@ -120,6 +120,14 @@ export async function scanFolder(root) {
       for (const c of f.tags) { if (!collections.has(c)) collections.set(c, []); collections.get(c).push(f.path); }
     }
   }
+  // clips the local proxy cached: cache/index.json maps their original URLs
+  try {
+    const cacheIdx = await readJson(await root.getDirectoryHandle('cache'), 'index.json');
+    for (const e of Object.values((cacheIdx && cacheIdx.entries) || {})) {
+      const f = e.complete && byPath.get('cache/' + e.file);
+      if (f) { byUrl.set(e.url, f); f.cached = true; }
+    }
+  } catch { /* no cache folder */ }
   const ownFile = await readJson(root, COLLECTIONS_FILE);
   const own = (ownFile && ownFile.collections) || {};
   return { name: root.name, index, byUrl, byPath, files, thumbs, folders, collections, own, writable: await canWrite(root) };
