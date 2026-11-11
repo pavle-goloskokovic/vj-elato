@@ -181,9 +181,10 @@ async def youtube(ctx, check, logs):
     player, ctrl = await open_pages(ctx, logs)
     await ctrl.click(".tabs button[data-tab=url]"); await ctrl.select_option("#target-deck", "A")
     await ctrl.fill("#url-input", YOUTUBE_TEST); await ctrl.click("#url-load")
-    await ctrl.wait_for_function("/p$|YouTube:/.test(document.querySelector('#url-status').textContent)", timeout=200000)
+    await ctrl.wait_for_function("/\d+p\d*|YouTube:/.test(document.querySelector('#url-status').textContent)", timeout=200000)
     status = await ctrl.evaluate("document.querySelector('#url-status').textContent")
-    check("yt-dlp resolves the video (title and height shown)", "Big Buck Bunny" in status and status.endswith("p"), status)
+    import re
+    check("yt-dlp resolves the video (title, height and link speed shown)", "Big Buck Bunny" in status and re.search(r"\d+p\d*", status) is not None and "link" in status, status)
     await ctrl.wait_for_function(DECK_READY, arg="A", timeout=120000); await ctrl.wait_for_timeout(2500)
     st = await ctrl.evaluate(PLAYER_STATUS)
     check("YouTube video plays through the proxy on WebGL", st["decks"]["A"]["mode"] == "gl" and not st["decks"]["A"]["error"] and (st["decks"]["A"]["duration"] or 0) > 60, f"mode={st['decks']['A']['mode']} dur={st['decks']['A']['duration']} err={st['decks']['A']['error']}")
