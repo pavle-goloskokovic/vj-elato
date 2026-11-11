@@ -14,6 +14,7 @@
     <span id="gpu-status" class="muted"></span>
     <button id="open-player">Open player</button>
     <button id="pick-folder" title="Pick the folder with your clips (USB stick)">Clip folder…</button>
+    <button id="rescan" class="small" title="Scan the clip folder again">rescan</button>
     <span id="folder-status" class="muted"></span>
     <span id="folder-hint" class="hint hidden">← reconnect the clip folder to restore the stick clips</span>
     <span id="proxy-status" class="proxy hidden" title="Streams go through the local server, so they get the WebGL effects; with fetch on play they are also cached on the stick (least recently used clips make room)">
@@ -32,6 +33,7 @@
         <button data-tab="destockd" class="active">Destockd</button>
         <button data-tab="spelunkr">Spelunkr</button>
         <button data-tab="url">URL</button>
+        <button data-tab="youtube" class="hidden">YouTube</button>
       </nav>
       <div class="lib-controls">
         <input id="search" type="search" placeholder="Search…" autocomplete="off">
@@ -46,6 +48,12 @@
         <input id="url-input" type="url" placeholder="https://…/clip.mp4">
         <button id="url-load">Load</button>
         <p class="muted">Any direct video URL, or a YouTube link when running from the stick (resolved by yt-dlp). Through the local server streams get the WebGL effects; on the web they play as a plain layer with the basic filters. <span id="url-status" class="hint"></span></p>
+      </div>
+      <div id="yt-panel" class="hidden">
+        <button id="yt-search">Search</button>
+        <label class="toggle"><input type="checkbox" id="skip-segments" checked> <span>skip sponsor segments</span></label>
+        <span id="yt-status" class="hint"></span>
+        <p class="muted">Results come from yt-dlp, no account needed. A click resolves the video for the current link speed and plays it through the proxy; it is cached on the stick with fetch on play.</p>
       </div>
       <div id="results"></div>
     </section>

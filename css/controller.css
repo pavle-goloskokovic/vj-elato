@@ -36,6 +36,8 @@ section { min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 #url-panel { display: flex; flex-wrap: wrap; gap: 8px; padding: 10px; border-bottom: 1px solid var(--line); }
 #url-panel input { flex: 1; min-width: 200px; }
 #url-panel p { width: 100%; margin: 0; }
+#yt-panel { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px; border-bottom: 1px solid var(--line); }
+#yt-panel p { width: 100%; margin: 0; }
 
 #results { flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; padding: 10px; align-content: start; align-items: start; }
 /* overflow: clip, not hidden. A grid item with overflow: hidden becomes a scroll

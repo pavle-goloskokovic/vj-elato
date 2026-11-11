@@ -81,6 +81,7 @@ export class Stage {
     if (d.objectUrl) { URL.revokeObjectURL(d.objectUrl); d.objectUrl = null; }
     d.error = null; d.meta = meta || null;
     d.in = (meta && meta.in) || 0; d.out = (meta && meta.out) || null;
+    d.skips = (meta && meta.skips) || [];          // [[start, end], ...] ranges to jump over (SponsorBlock)
     d.mode = this.renderer && canUseGl(source) ? 'gl' : 'css';
     v.pause();
     v.removeAttribute('src');
@@ -150,6 +151,16 @@ export class Stage {
       const d = this.decks[name], v = this.videos[name];
       if (d.out && v.currentTime >= d.out) {
         if (d.params.loop) v.currentTime = d.in; else v.pause();
+        continue;
+      }
+      if (d.skips && d.skips.length && !v.seeking) {
+        const t = v.currentTime;
+        const s = d.skips.find(([a, b]) => t >= a && t < b - 0.05);
+        if (s) {
+          const end = d.out || (isFinite(v.duration) ? v.duration : Infinity);
+          if (s[1] >= end - 0.1) { if (d.params.loop) v.currentTime = d.in; else v.pause(); }
+          else v.currentTime = s[1];
+        }
       }
     }
   }

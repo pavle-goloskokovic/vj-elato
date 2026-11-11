@@ -1,6 +1,6 @@
 import { createBus } from './bus.js';
 import { loadCatalogs, destockdAll, destockdCollection, spelunkrAll, fmtBytes, fmtTime } from './catalog.js';
-import { supportsFolders, pickFolder, restoreFolder, requestAccess, scanFolder, getFile, localThumb, saveCollections, COLLECTIONS_FILE } from './library.js';
+import { supportsFolders, pickFolder, restoreFolder, requestAccess, scanFolder, scanServer, getFile, localThumb, saveCollections, COLLECTIONS_FILE } from './library.js';
 import { Stage, DEFAULT_PARAMS, DEFAULT_MASTER } from './stage.js';
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -26,6 +26,8 @@ const state = {
   playerHasState: false,  // true once a live player has told us what it holds
   playerNeedsSync: false, // we synced a player while some clip's file was not yet reachable
   proxy: null,            // info from the local server's /proxy/info, when we run from it
+  skipSegments: true,     // SponsorBlock: skip sponsor/intro/outro ranges in YouTube clips
+  ytResults: [],          // last YouTube search
 };
 
 // ---------- live preview stage ----------
@@ -175,7 +177,7 @@ function persist() {
       const d = state.decks[name];
       decks[name] = { clip: serializeClip(d.clip), params: d.params, playing: d.playing };
     }
-    try { localStorage.setItem(STORE_KEY, JSON.stringify({ decks, master: state.master, live: state.live })); } catch { /* storage blocked */ }
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ decks, master: state.master, live: state.live, skipSegments: state.skipSegments })); } catch { /* storage blocked */ }
   }, 300);
 }
 function loadPersisted() {
@@ -281,8 +283,8 @@ function sendSync() {
   state.playerHasState = true;
   state.playerNeedsSync = ['A', 'B'].some((n) => state.decks[n].clip && !state.decks[n].source);
 }
-const clipMeta = (c) => ({ key: c.key, title: c.title, thumb: c.thumb && !c.thumb.startsWith('blob:') ? c.thumb : '', url: c.url || null, localPath: c.local ? c.local.path : (c.localPath || null), in: c.in || 0, out: c.out || null, source: c.source });
-const clipFromMeta = (m) => ({ key: m.key, title: m.title, thumb: m.thumb, url: m.url, localPath: m.localPath, in: m.in, out: m.out, source: m.source });
+const clipMeta = (c) => ({ skips: state.skipSegments && c.segments ? c.segments.map((s) => [s.start, s.end]) : [], key: c.key, title: c.title, thumb: c.thumb && !c.thumb.startsWith('blob:') ? c.thumb : '', url: c.url || null, localPath: c.local ? c.local.path : (c.localPath || null), in: c.in || 0, out: c.out || null, source: c.source });
+const clipFromMeta = (m) => ({ key: m.key, title: m.title, thumb: m.thumb, url: m.url, localPath: m.localPath, in: m.in, out: m.out, source: m.source, youtube: m.source === 'youtube', segments: (m.skips || []).map(([start, end]) => ({ start, end })) });
 
 $('#open-player').addEventListener('click', () => window.open('player.html', 'vj-elato-player'));
 
@@ -291,6 +293,7 @@ async function resolveSource(clip) {
   const local = clip.local
     || (state.library && clip.url && state.library.byUrl.get(clip.url))
     || (state.library && clip.localPath && state.library.byPath.get(clip.localPath));
+  if (local && local.url) return { kind: 'url', url: local.url, via: 'stick' };
   if (local) {
     try { return { kind: 'file', file: await getFile(local) }; }
     catch (e) { console.warn('local file failed, falling back to URL', e); }
@@ -326,7 +329,7 @@ function stallNote(clip, source) {
   if (!mbps) return '';
   return clip.bytes * 8 / clip.duration / 1e6 * 2 > mbps ? ' · may stall' : '';
 }
-const sourceLabel = (src) => !src ? '' : src.kind === 'file' ? 'stick' : src.via === 'proxy' ? 'proxy' : 'stream';
+const sourceLabel = (src) => !src ? '' : src.kind === 'file' || src.via === 'stick' ? 'stick' : src.via === 'proxy' ? 'proxy' : 'stream';
 
 // After a restore: feed the preview stage, and the player where it needs it.
 // A clip that was reachable only as a stream (folder not yet reconnected)
@@ -337,7 +340,7 @@ async function loadPreviews(syncPlayer) {
   for (const name of ['A', 'B']) {
     const d = state.decks[name];
     if (!d.clip) continue;
-    const hadStream = d.source && d.source.kind === 'url' && d.source.via !== 'proxy';
+    const hadStream = d.source && d.source.kind === 'url' && !d.source.via;
     if (!d.source || (hadStream && state.library)) {
       const src = await resolveSource(d.clip);
       if (!src || (hadStream && src.kind === 'url')) continue;      // nothing new
@@ -378,6 +381,8 @@ function setTab(tab) {
   state.tab = tab;
   for (const t of tabs) t.classList.toggle('active', t.dataset.tab === tab);
   $('#url-panel').classList.toggle('hidden', tab !== 'url');
+  $('#yt-panel').classList.toggle('hidden', tab !== 'youtube');
+  search.placeholder = tab === 'youtube' ? 'Search YouTube, or paste a playlist or channel link, then Enter' : 'Search…';
   fillFilter();
   render();
 }
@@ -392,6 +397,8 @@ function fillFilter() {
   } else if (state.tab === 'spelunkr' && state.catalogs) {
     add('all', 'All channels');
     for (const c of state.catalogs.spelunkr.channels) add('ch:' + c.id, `${c.emoji} ${c.name} (${c.items.length})`);
+  } else if (state.tab === 'youtube') {
+    for (const e of state.ytResults) out.push({ key: 'yt:' + e.id, source: 'youtube', youtube: true, title: e.title, url: `https://www.youtube.com/watch?v=${e.id}`, thumb: e.thumb || '', duration: e.duration, sub: `${e.channel || ''}${e.duration ? ' · ' + fmtTime(e.duration) : ''}` });
   } else if (state.tab === 'stick' && state.library) {
     const lib = state.library;
     add('all', `All files (${lib.files.length})`);
@@ -402,7 +409,7 @@ function fillFilter() {
   } else if (state.tab === 'stick') {
     add('all', 'All files');
   }
-  filter.classList.toggle('hidden', state.tab === 'url');
+  filter.classList.toggle('hidden', state.tab === 'url' || state.tab === 'youtube');
 }
 search.addEventListener('input', debounce(render, 120));
 filter.addEventListener('change', render);
@@ -430,6 +437,8 @@ function currentClips() {
     for (const c of spelunkrAll({ ...cat.spelunkr, channels: chans })) {
       if (!terms.length || match(`${c.title} ${c.year || ''} ${c.channelName}`.toLowerCase())) { out.push(c); if (out.length >= 600) break; }
     }
+  } else if (state.tab === 'youtube') {
+    for (const e of state.ytResults) out.push({ key: 'yt:' + e.id, source: 'youtube', youtube: true, title: e.title, url: `https://www.youtube.com/watch?v=${e.id}`, thumb: e.thumb || '', duration: e.duration, sub: `${e.channel || ''}${e.duration ? ' · ' + fmtTime(e.duration) : ''}` });
   } else if (state.tab === 'stick' && state.library) {
     const lib = state.library;
     let paths = null;
@@ -487,7 +496,7 @@ async function toggleOwn(name, path) {
   const i = list.indexOf(path);
   if (i >= 0) list.splice(i, 1); else list.push(path);
   try {
-    await saveCollections(lib.handle, lib.own);
+    await saveCollections(lib, lib.own);
   } catch (e) {
     if (!state.warnedWrite) { state.warnedWrite = true; alert(`Could not write ${COLLECTIONS_FILE} on the stick (${e.message}). Reconnect the folder and allow editing, or the collection is kept only for this session.`); }
   }
@@ -496,12 +505,13 @@ async function toggleOwn(name, path) {
 
 function render() {
   const clips = currentClips();
-  count.textContent = state.tab === 'url' ? '' : `${clips.length}${clips.length >= 600 ? '+' : ''}`;
+  count.textContent = state.tab === 'url' || state.tab === 'youtube' ? '' : `${clips.length}${clips.length >= 600 ? '+' : ''}`;
   results.innerHTML = '';
   if (state.tab === 'stick' && !state.library) {
     results.innerHTML = `<div class="notice">${supportsFolders() ? 'Pick your clip folder with the button above. The browser remembers it.' : 'This browser cannot open folders. Use Chrome or Edge for the stick library; URL sources still work.'}</div>`;
     return;
   }
+  if (state.tab === 'youtube' && !clips.length) { results.innerHTML = `<div class="notice">${state.proxy && state.proxy.youtube ? 'Type a search above and press Enter.' : 'YouTube needs the local server with yt-dlp (run from the stick).'}</div>`; return; }
   if (!clips.length) { results.innerHTML = '<div class="notice">Nothing matches.</div>'; return; }
   const frag = document.createDocumentFragment();
   for (const c of clips) frag.appendChild(card(c));
@@ -530,7 +540,8 @@ function card(c) {
     const star = e.target.closest('button.star');
     if (star) { await toggleOwn('Starred', local.path); star.classList.toggle('on', inOwn('Starred', local.path)); return; }
     const b = e.target.closest('button[data-deck]');
-    loadClip(b ? b.dataset.deck : $('#target-deck').value, c);
+    const deck = b ? b.dataset.deck : $('#target-deck').value;
+    if (c.youtube && !c.segments) loadYoutube(deck, c.url, $('#yt-status')); else loadClip(deck, c);
   });
   return el;
 }
@@ -543,18 +554,43 @@ $('#url-load').addEventListener('click', async () => {
   if (!url) return;
   const yt = YT_RE.exec(url);
   if (!yt) { loadClip($('#target-deck').value, { key: 'url:' + url, source: 'url', title: url.split('/').pop() || url, url, thumb: '' }); return; }
-  // YouTube: the local proxy resolves it with yt-dlp; ask for the title and thumbnail first
-  const status = $('#url-status');
+  loadYoutube($('#target-deck').value, url, $('#url-status'));
+});
+
+// YouTube: the local proxy resolves it with yt-dlp (title, thumbnail, rendition for the link,
+// SponsorBlock segments), then the clip loads through the proxy like any stream.
+async function loadYoutube(deck, url, status) {
   if (!state.proxy || !state.proxy.youtube) { status.textContent = 'YouTube needs the local server with yt-dlp (run from the stick).'; return; }
   status.textContent = 'resolving with yt-dlp…';
   try {
     const r = await fetch(new URL('proxy/resolve?url=' + encodeURIComponent(url), location.href));
     const info = await r.json();
     if (info.error) { status.textContent = 'YouTube: ' + info.error; return; }
-    status.textContent = `${info.title} · ${info.height}p${info.fps > 30 ? info.fps : ''}${info.speedMbps ? ` · link ${info.speedMbps} Mbps` : ''}${info.stall ? ' · may stall, lowest rendition' : ''}`;
-    loadClip($('#target-deck').value, { key: 'yt:' + info.id, source: 'youtube', youtube: true, title: info.title, url: info.key, thumb: info.thumbnail || '', duration: info.duration, bytes: info.tbr && info.duration ? info.tbr * 125 * info.duration : null, stall: info.stall });
+    const segs = info.segments || [];
+    status.textContent = `${info.title} · ${info.height}p${info.fps > 30 ? info.fps : ''}${info.speedMbps ? ` · link ${info.speedMbps} Mbps` : ''}${info.stall ? ' · may stall, lowest rendition' : ''}${segs.length ? ` · ${segs.length} skip${segs.length > 1 ? 's' : ''}` : ''}`;
+    loadClip(deck, { key: 'yt:' + info.id, source: 'youtube', youtube: true, title: info.title, url: info.key, thumb: info.thumbnail || '', duration: info.duration, bytes: info.tbr && info.duration ? info.tbr * 125 * info.duration : null, stall: info.stall, segments: segs });
   } catch (e) { status.textContent = 'YouTube: ' + e.message; }
-});
+}
+
+// ---------- YouTube search tab ----------
+async function youtubeSearch(q) {
+  const status = $('#yt-status');
+  if (!state.proxy || !state.proxy.youtube) { status.textContent = 'YouTube needs the local server with yt-dlp (run from the stick).'; return; }
+  if (!q) return;
+  status.textContent = 'searching…';
+  results.innerHTML = '';
+  try {
+    const r = await fetch(new URL('proxy/search?q=' + encodeURIComponent(q), location.href));
+    const d = await r.json();
+    if (d.error) { status.textContent = 'YouTube: ' + d.error; return; }
+    state.ytResults = d.entries || [];
+    status.textContent = `${state.ytResults.length} results`;
+    render();
+  } catch (e) { status.textContent = 'YouTube: ' + e.message; }
+}
+$('#yt-search').addEventListener('click', () => youtubeSearch(search.value.trim()));
+search.addEventListener('keydown', (e) => { if (e.key === 'Enter' && state.tab === 'youtube') youtubeSearch(search.value.trim()); });
+$('#skip-segments').addEventListener('change', (e) => { state.skipSegments = e.target.checked; persist(); });
 
 // ---------- clip folder ----------
 const folderStatus = $('#folder-status');
@@ -567,12 +603,26 @@ $('#pick-folder').addEventListener('click', async () => {
 async function useFolder(handle) {
   folderStatus.textContent = 'scanning…';
   const lib = await scanFolder(handle);
-  state.library = { ...lib, handle };
-  folderStatus.textContent = `${lib.name}: ${lib.files.length} clips${lib.byUrl.size ? `, ${lib.byUrl.size} Destockd` : ''}, ${lib.thumbs.size} thumbs${lib.writable ? '' : ', read-only'}`;
-  fillFilter(); render();
+  useLibrary(lib);
   await loadPreviews(true);     // clips waiting on the stick can now be resolved
 }
+function useLibrary(lib) {
+  state.library = lib;
+  folderStatus.textContent = `${lib.server ? 'stick ' : ''}${lib.name}: ${lib.files.length} clips${lib.byUrl.size ? `, ${lib.byUrl.size} Destockd` : ''}, ${lib.thumbs.size} thumbs${lib.writable ? '' : ', read-only'}`;
+  $('#pick-folder').classList.toggle('hidden', !!lib.server);
+  fillFilter(); render();
+}
+// Served from the stick: the server lists it, no picker needed. Call again to rescan.
+async function useServerLibrary() {
+  try {
+    useLibrary(await scanServer());
+    await loadPreviews(true);
+    return true;
+  } catch (e) { console.warn('server library unavailable', e); return false; }
+}
+$('#rescan').addEventListener('click', () => { if (state.library && state.library.server) useServerLibrary(); else if (state.library) useFolder(state.library.handle); });
 async function restoreLibrary() {
+  if (state.proxy && state.proxy.stickLibrary && await useServerLibrary()) return;
   if (!supportsFolders()) return;
   const r = await restoreFolder();
   if (!r) return;
@@ -602,6 +652,7 @@ async function refreshProxy() {
 }
 function renderProxy() {
   const p = state.proxy;
+  $('.tabs button[data-tab=youtube]').classList.toggle('hidden', !(p && p.youtube));
   if (!p) { proxyBox.classList.add('hidden'); return; }
   proxyBox.classList.remove('hidden');
   const c = p.cache || {};
@@ -647,7 +698,9 @@ function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&am
     }
     state.master = { ...DEFAULT_MASTER, ...saved.master };
     state.live = saved.live !== false;
+    state.skipSegments = saved.skipSegments !== false;
   }
+  $('#skip-segments').checked = state.skipSegments;
   syncInputs();
   bus.send('state?');
   setTimeout(async () => {

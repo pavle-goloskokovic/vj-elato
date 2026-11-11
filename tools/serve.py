@@ -16,6 +16,10 @@ same-origin, so the player can run it through the full effect chain.
   POST /proxy/settings  {"fetchOnPlay": bool}
   POST /proxy/clear
   GET  /proxy/resolve?url=<youtube url>  {id, title, duration, thumbnail} via yt-dlp, or {error}
+  GET  /proxy/search?q=<text or playlist/channel url>&n=20   YouTube results via yt-dlp (flat, fast)
+  GET  /stick/index                      the stick's clips, thumbnails, Destockd index, collections, cache
+  GET  /stick/<path>                     a file on the stick (byte ranges supported)
+  POST /stick/collections {"collections": {...}}   writes vj-elato-collections.json on the stick
 
 YouTube: a watch URL given to /proxy is resolved with yt-dlp (yt-dlp.exe next to this file,
 or on PATH) to a direct H.264 video stream, which is then proxied and cached like any other
@@ -31,7 +35,7 @@ With fetch-on-play, the first play of a stream also downloads the whole file in 
 background; a file is listed as cached only once complete. Least recently used clips
 are removed to make room. Only files this proxy wrote are ever deleted.
 """
-import hashlib, json, os, re, shutil, ssl, subprocess, sys, threading, time, urllib.parse, urllib.request, webbrowser
+import hashlib, json, os, re, shutil, ssl, subprocess, sys, threading, time, urllib.error, urllib.parse, urllib.request, webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
@@ -210,7 +214,61 @@ def resolve_youtube(url):
             "thumbnail": info.get("thumbnail") or "", "height": chosen["height"], "fps": chosen["fps"], "tbr": chosen["tbr"],
             "formatId": chosen["id"], "speedMbps": round(bps * 8 / 1e6, 2) if bps else None,
             "stall": bool(bps and chosen["tbr"] * 1000 * STALL_MARGIN > bps * 8),
+            "segments": sponsorblock(vid),
             "url": chosen["url"], "key": f"https://www.youtube.com/watch?v={vid}"}
+
+# YouTube search and listing: yt-dlp's flat mode returns ids, titles, durations and
+# thumbnails without resolving each video. A playlist or channel URL lists its videos.
+_search_cache = {}
+def youtube_search(q, n=20):
+    if not YTDLP: return {"error": "yt-dlp not found"}
+    key = (q, n)
+    hit = _search_cache.get(key)
+    if hit and time.time() - hit[1] < 600: return hit[0]
+    target = q if re.match(r"^https?://", q) else f"ytsearch{n}:{q}"
+    cmd = [YTDLP, "--flat-playlist", "--no-warnings", "--playlist-end", str(n), "-J", target]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
+    except subprocess.TimeoutExpired:
+        return {"error": "yt-dlp timed out"}
+    if r.returncode != 0 or not r.stdout.strip():
+        msg = (r.stderr or "").strip().splitlines()
+        return {"error": (msg[-1] if msg else "search failed")[:200]}
+    try: d = json.loads(r.stdout)
+    except Exception: return {"error": "no JSON from yt-dlp"}
+    entries = []
+    for e in d.get("entries") or ([d] if d.get("id") else []):
+        if not e or not e.get("id"): continue
+        thumbs = e.get("thumbnails") or []
+        thumb = e.get("thumbnail") or (thumbs[-1]["url"] if thumbs else f"https://i.ytimg.com/vi/{e['id']}/hqdefault.jpg")
+        entries.append({"id": e["id"], "title": e.get("title") or e["id"], "duration": e.get("duration"),
+                        "channel": e.get("channel") or e.get("uploader") or "", "views": e.get("view_count"), "thumb": thumb})
+    out = {"query": q, "entries": entries}
+    _search_cache[key] = (out, time.time())
+    return out
+
+# SponsorBlock: community-marked ranges (sponsor reads, intros, outros, non-music parts of
+# music videos ...) from the public API, keyed by video id. Short timeout; never blocks playback.
+SB_CATEGORIES = ["sponsor", "selfpromo", "intro", "outro", "interaction", "music_offtopic", "preview", "filler"]
+_sb_cache = {}
+def sponsorblock(vid):
+    hit = _sb_cache.get(vid)
+    if hit and time.time() - hit[1] < 3600: return hit[0]
+    segs = []
+    try:
+        q = urllib.parse.urlencode({"videoID": vid, "categories": json.dumps(SB_CATEGORIES)})
+        req = urllib.request.Request("https://sponsor.ajay.app/api/skipSegments?" + q, headers={"User-Agent": UA})
+        with urllib.request.urlopen(req, timeout=5, context=ssl_context()) as r:
+            for s in json.load(r):
+                a, b = s.get("segment", [0, 0])
+                if b > a: segs.append({"start": round(a, 2), "end": round(b, 2), "category": s.get("category")})
+    except urllib.error.HTTPError as e:
+        if e.code != 404: print(f"  sponsorblock: {e}")
+    except Exception as e:
+        print(f"  sponsorblock: {e}")
+    segs.sort(key=lambda s: s["start"])
+    _sb_cache[vid] = (segs, time.time())
+    return segs
 
 # ---------- cache ----------
 class Cache:
@@ -336,6 +394,47 @@ class Cache:
 
 cache = Cache(CACHE_DIR, CACHE_CAP, RESERVE) if (CACHE_ON and PROXY_ON) else None
 
+# ---------- the stick, served ----------
+# With the server running, the controller takes its clip library from here instead of the
+# browser's folder picker: no permission prompts, works in any browser, and the player gets
+# plain same-origin URLs. Only the stick root (the parent of the vj-elato folder) is served.
+VIDEO_EXT = (".mp4", ".m4v", ".webm", ".mov", ".mkv", ".ogv")
+IMAGE_EXT = (".jpg", ".jpeg", ".png", ".webp")
+COLLECTIONS_FILE = "vj-elato-collections.json"
+
+def scan_stick():
+    files, images = [], {}
+    for r, dirs, fs in os.walk(STICK):
+        rel_dir = os.path.relpath(r, STICK).replace("\\", "/")
+        rel_dir = "" if rel_dir == "." else rel_dir + "/"
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d.lower() not in ("vj-elato", "system volume information", "$recycle.bin")]
+        for f in fs:
+            if f.startswith("."): continue
+            rel = rel_dir + f; low = f.lower()
+            if low.endswith(VIDEO_EXT):
+                try: size = os.path.getsize(os.path.join(r, f))
+                except OSError: size = 0
+                files.append({"path": rel, "name": f, "bytes": size, "folder": rel_dir.split("/")[0] if rel_dir else ""})
+            elif low.endswith(IMAGE_EXT):
+                images[os.path.splitext(rel)[0]] = rel
+    files.sort(key=lambda x: x["path"].lower())
+    for f in files:
+        f["thumb"] = images.get(os.path.splitext(f["path"])[0])
+    def read_json(name):
+        try: return json.load(open(os.path.join(STICK, name), encoding="utf-8"))
+        except Exception: return None
+    own = (read_json(COLLECTIONS_FILE) or {}).get("collections", {})
+    return {"root": STICK, "writable": os.access(STICK, os.W_OK), "files": files,
+            "index": read_json("destockd-index.json"), "own": own,
+            "cache": [{"url": e["url"], "file": "cache/" + e["file"], "title": e.get("title")} for e in (cache.entries.values() if cache else []) if e.get("complete")]}
+
+def stick_path(rel):
+    rel = urllib.parse.unquote(rel)
+    if ".." in rel.replace("\\", "/").split("/"): return None
+    full = os.path.abspath(os.path.join(STICK, rel.replace("/", os.sep)))
+    if not full.startswith(os.path.join(os.path.abspath(STICK), "")) or not os.path.isfile(full): return None
+    return full
+
 # ---------- handler ----------
 class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *a, **k): super().__init__(*a, directory=ROOT, **k)
@@ -388,12 +487,25 @@ class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
         if not PROXY_ON and u.path.startswith("/proxy"): return self.send_error(404)
+        if u.path == "/stick/index": return self.json(scan_stick())
+        if u.path.startswith("/stick/"):
+            full = stick_path(u.path[len("/stick/"):])
+            if not full: return self.send_error(404)
+            f = self.send_file_head(full)
+            if f:
+                try: self.copyfile(f, self.wfile)
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError): pass
+                finally: f.close()
+            return
         if u.path == "/proxy": return self.proxy(u)
-        if u.path == "/proxy/info": return self.json({"proxy": True, "cache": cache.info() if cache else {"enabled": False}, "fetchOnPlay": bool(cache and cache.fetch_on_play), "stick": STICK, "youtube": bool(YTDLP), "speed": speed.mbps(), "adapt": ADAPT, "ytMax": YT_MAX})
+        if u.path == "/proxy/info": return self.json({"proxy": True, "cache": cache.info() if cache else {"enabled": False}, "fetchOnPlay": bool(cache and cache.fetch_on_play), "stick": STICK, "youtube": bool(YTDLP), "speed": speed.mbps(), "adapt": ADAPT, "ytMax": YT_MAX, "stickLibrary": True})
         if u.path == "/proxy/resolve":
             url = urllib.parse.parse_qs(u.query).get("url", [""])[0]
             info = resolve_youtube(url)
             return self.json({k: v for k, v in info.items() if k != "url"})
+        if u.path == "/proxy/search":
+            qs = urllib.parse.parse_qs(u.query)
+            return self.json(youtube_search(qs.get("q", [""])[0].strip(), int(qs.get("n", ["20"])[0])))
         if u.path == "/proxy/list":
             return self.json({"entries": [{"url": e["url"], "file": "cache/" + e["file"], "bytes": e["bytes"], "lastUsed": e.get("lastUsed"), "title": e.get("title")} for e in (cache.entries.values() if cache else []) if e.get("complete")]})
         return super().do_GET()
@@ -406,6 +518,16 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception: data = {}
             if "fetchOnPlay" in data: cache.fetch_on_play = bool(data["fetchOnPlay"])
             return self.json({"fetchOnPlay": cache.fetch_on_play})
+        if u.path == "/stick/collections":
+            try: data = json.loads(body)
+            except Exception: data = {}
+            try:
+                tmp = os.path.join(STICK, COLLECTIONS_FILE + ".tmp")
+                json.dump({"collections": data.get("collections", {}), "saved": time.strftime("%Y-%m-%dT%H:%M:%S")}, open(tmp, "w", encoding="utf-8"), indent=1)
+                os.replace(tmp, os.path.join(STICK, COLLECTIONS_FILE))
+                return self.json({"saved": True})
+            except OSError as e:
+                return self.json({"saved": False, "error": str(e)})
         if u.path == "/proxy/clear" and cache:
             cache.clear(); return self.json({"cleared": True, "cache": cache.info()})
         self.send_error(404)

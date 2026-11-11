@@ -23,6 +23,10 @@ Scenarios:
   stores the whole clip in the cache, a second play comes from the cache, the toggle reaches the server.
 - **youtube** – a YouTube link resolves through yt-dlp and plays on WebGL (skipped without yt-dlp).
 - **adapt** – with a faked 1.2 Mbps link the server picks a rendition below 720p.
+- **stick** – the server lists the stick (no folder picker), a clip without a sibling image gets a
+  grabbed thumbnail, plays as a same-origin URL on WebGL, and the star writes the collections file.
+- **search** – the YouTube tab searches through yt-dlp, a result plays through the proxy, and a
+  resolve carries a SponsorBlock segment list.
 
 Why it is set up the way it is:
 

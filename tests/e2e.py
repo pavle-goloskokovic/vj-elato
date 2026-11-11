@@ -200,7 +200,52 @@ async def adapt(ctx, check, logs):
     r = json.load(urllib.request.urlopen(BASE + "proxy/resolve?url=" + urllib.parse.quote(YOUTUBE_TEST, safe=""), timeout=200))
     check("a 1.2 Mbps link gets a rendition below 720p", "error" not in r and r["height"] < 720 and r["tbr"] * 1000 * 2 <= 1.2e6 + 1, {k: r.get(k) for k in ("height", "fps", "tbr", "speedMbps", "stall", "error")})
 
-SCENARIOS = {"smoke": smoke, "reload": reload, "crop": crop, "proxy": proxy, "youtube": youtube, "adapt": adapt}
+async def stick(ctx, check, logs):
+    """The server lists the stick: no folder picker, clips play as same-origin URLs, stars save on the stick."""
+    import urllib.request
+    idx = json.load(urllib.request.urlopen(BASE + "stick/index", timeout=10))
+    check("stick/index lists the test clip", any(f["path"] == "clips/stick-test.mp4" for f in idx["files"]), [f["path"] for f in idx["files"]][:3])
+    player, ctrl = await open_pages(ctx, logs)
+    await ctrl.wait_for_function("document.querySelector('#folder-status').textContent.includes('clips')", timeout=20000)
+    status = await ctrl.evaluate("document.querySelector('#folder-status').textContent")
+    check("library comes from the server without a picker", status.startswith("stick") and await ctrl.evaluate("document.querySelector('#pick-folder').classList.contains('hidden')"), status)
+    await ctrl.click(".tabs button[data-tab=stick]")
+    await ctrl.fill("#search", "stick-test")                 # the proxy scenario may have left cached clips on this stick
+    await ctrl.wait_for_function("document.querySelectorAll('#results .card').length === 1")
+    await ctrl.wait_for_timeout(1500)
+    thumb = await ctrl.evaluate("document.querySelector('#results .card img').src")
+    check("stick clip without a sibling image gets a grabbed-frame thumbnail", thumb.startswith("blob:"), thumb[:40])
+    await ctrl.select_option("#target-deck", "A"); await ctrl.click("#results .card >> nth=0")
+    await ctrl.wait_for_function(DECK_READY, arg="A"); await ctrl.wait_for_timeout(1500)
+    st = await ctrl.evaluate(PLAYER_STATUS)
+    badge = await ctrl.evaluate("document.querySelector('.pane[data-pane=A] .badge').textContent")
+    check("stick clip plays via the server URL on WebGL with the stick badge", st["decks"]["A"]["mode"] == "gl" and badge.startswith("stick"), f"mode={st['decks']['A']['mode']} badge={badge}")
+    await ctrl.hover("#results .card >> nth=0"); await ctrl.click("#results .card >> nth=0 >> button.star"); await ctrl.wait_for_timeout(800)
+    path = os.path.join(SITE, "vj-elato-collections.json")
+    saved = json.load(open(path, encoding="utf-8")) if os.path.exists(path) else {}
+    check("star writes vj-elato-collections.json on the stick through the server", "clips/stick-test.mp4" in saved.get("collections", {}).get("Starred", []), saved)
+
+async def search(ctx, check, logs):
+    import urllib.request
+    info = json.load(urllib.request.urlopen(BASE + "proxy/info", timeout=10))
+    if not info.get("youtube"):
+        print("  skip: no yt-dlp on this machine"); return
+    player, ctrl = await open_pages(ctx, logs)
+    check("YouTube tab is offered when yt-dlp is available", not await ctrl.evaluate("document.querySelector('.tabs button[data-tab=youtube]').classList.contains('hidden')"))
+    await ctrl.click(".tabs button[data-tab=youtube]")
+    await ctrl.fill("#search", "big buck bunny blender"); await ctrl.press("#search", "Enter")
+    await ctrl.wait_for_function("document.querySelectorAll('#results .card').length >= 5", timeout=120000)
+    titles = await ctrl.evaluate("[...document.querySelectorAll('#results .card .name')].map(e => e.textContent)")
+    check("search lists results with titles and YouTube thumbnails", any("Bunny" in t for t in titles) and "ytimg.com" in await ctrl.evaluate("document.querySelector('#results .card img').src"), titles[:3])
+    await ctrl.select_option("#target-deck", "B"); await ctrl.click("#results .card >> nth=0")
+    await ctrl.wait_for_function("/\\d+p\\d*|YouTube:/.test(document.querySelector('#yt-status').textContent)", timeout=200000)
+    await ctrl.wait_for_function(DECK_READY, arg="B", timeout=120000); await ctrl.wait_for_timeout(2000)
+    st = await ctrl.evaluate(PLAYER_STATUS)
+    check("a search result loads and plays through the proxy on WebGL", st["decks"]["B"]["mode"] == "gl" and (st["decks"]["B"]["duration"] or 0) > 10, f"mode={st['decks']['B']['mode']} dur={st['decks']['B']['duration']}")
+    r = json.load(urllib.request.urlopen(BASE + "proxy/resolve?url=" + urllib.parse.quote(YOUTUBE_TEST, safe=""), timeout=200))
+    check("resolve carries a SponsorBlock segment list", isinstance(r.get("segments"), list), r.get("segments"))
+
+SCENARIOS = {"smoke": smoke, "reload": reload, "crop": crop, "proxy": proxy, "youtube": youtube, "adapt": adapt, "stick": stick, "search": search}
 
 async def run(names, keep):
     from playwright.async_api import async_playwright
@@ -235,13 +280,15 @@ def main():
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "make_portable.py"), SITE], check=True, stdout=subprocess.DEVNULL)
     site = os.path.join(SITE, "vj-elato")
     shutil.copy(clip, os.path.join(site, "test.mp4"))
+    os.makedirs(os.path.join(SITE, "clips"), exist_ok=True)
+    shutil.copy(clip, os.path.join(SITE, "clips", "stick-test.mp4"))      # seen by the server's stick scan
     print(f"site: {site}\nclip: {clip}")
     names = list(SCENARIOS) if a.scenario == "all" else [a.scenario]
     failed = []
     # smoke/reload/crop run against plain static hosting (as on GitHub Pages: no proxy),
     # the proxy scenario against the full local server
-    for flags, group in ((["--no-proxy"], [n for n in names if n not in ("proxy", "youtube", "adapt")]),
-                         (["--cache-gb", "1"], [n for n in names if n in ("proxy", "youtube")]),
+    for flags, group in ((["--no-proxy"], [n for n in names if n not in ("proxy", "youtube", "adapt", "stick", "search")]),
+                         (["--cache-gb", "1"], [n for n in names if n in ("proxy", "youtube", "stick", "search")]),
                          (["--cache-gb", "1", "--fake-speed", "youtube=1.2"], [n for n in names if n == "adapt"])):
         if not group: continue
         srv = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "serve.py"), str(PORT), site, "--no-browser", *flags], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
