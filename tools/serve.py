@@ -80,9 +80,12 @@ def upstream_size(url):
 
 # ---------- YouTube via yt-dlp ----------
 YT_RE = re.compile(r"^(https?://)?(www\.|m\.)?(youtube\.com/(watch\?.*v=|shorts/|live/|embed/)|youtu\.be/)([A-Za-z0-9_-]{11})")
-# H.264 video-only (the player is muted anyway): 720-1080p at <=30 fps when it exists, else the
-# best H.264 up to 1080p (60 fps uploads often have no 30 fps rendition above 480p), else any mp4
-YT_FORMAT = "bv*[vcodec^=avc1][height>=720][height<=1080][fps<=30]/bv*[vcodec^=avc1][height<=1080]/bv*[height<=1080][ext=mp4]/b[height<=1080][ext=mp4]/b[ext=mp4]/b"
+# H.264 video-only (the player is muted anyway), smallest file that still looks right on a
+# projector: 1080p30, then 720p30, then for 60 fps uploads (which have no 30 fps rendition
+# above 480p) 720p60 before 1080p60, then whatever H.264 or mp4 there is.
+YT_FORMAT = ("bv*[vcodec^=avc1][height=1080][fps<=30]/bv*[vcodec^=avc1][height=720][fps<=30]"
+             "/bv*[vcodec^=avc1][height=720]/bv*[vcodec^=avc1][height=1080]"
+             "/bv*[vcodec^=avc1][height<=1080]/bv*[height<=1080][ext=mp4]/b[height<=1080][ext=mp4]/b[ext=mp4]/b")
 
 def youtube_id(url):
     m = YT_RE.match(url or "")
