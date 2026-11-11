@@ -139,8 +139,20 @@ async def reload(ctx, check, logs):
     pa2 = await player.evaluate("document.getElementById('deckA').currentTime")
     check("controller reload restores clips and settings", r["titles"] == ["test.mp4", "shot_026.mp4"] and r["hue"] == "90" and r["fb"] == "0.8" and r["xf"] == "0.3", r)
     check("controller reload leaves the player playing", pa2 > pa, f"{pa:.1f} -> {pa2:.1f}")
-    check("previews resume after controller reload", abs(r["pvA"] - pa2) < 1.5 and r["pvB"] > 0, f"preview {r['pvA']:.1f} vs player {pa2:.1f}")
-    await player.reload(); await player.wait_for_timeout(4000)
+    # the preview is nudged to the player at most every 2 s, and the 14 s clip loops, so sample
+    # for a few seconds rather than once
+    synced, pair = False, None
+    for _ in range(8):
+        pv = await ctrl.evaluate("document.querySelector('#pvA').currentTime")
+        pl = await player.evaluate("document.getElementById('deckA').currentTime")
+        pair = (pv, pl)
+        if abs(pv - pl) < 1.2 and r["pvB"] > 0: synced = True; break
+        await ctrl.wait_for_timeout(1000)
+    check("previews resume after controller reload", synced, f"preview {pair[0]:.1f} vs player {pair[1]:.1f}")
+    await player.reload()
+    # with safe loading the clip is on screen only once it can play at the resumed position
+    await ctrl.wait_for_function("""() => new Promise(res => { const bc=new BroadcastChannel('vj-elato'); bc.onmessage=e=>{ if(e.data.type==='status'){ const a=e.data.decks.A; if (a.meta && !a.loading && a.ready) { res(true); bc.close(); } } }; setTimeout(() => { res(false); bc.close(); }, 900); })""", timeout=60000, polling=1000)
+    await player.wait_for_timeout(500)
     st = await ctrl.evaluate(PLAYER_STATUS)
     pa3 = await player.evaluate("document.getElementById('deckA').currentTime")
     check("player reload resumes clips, settings and position", st["decks"]["A"]["mode"] == "gl" and st["decks"]["A"]["params"]["hue"] == 90 and st["master"]["feedback"] == 0.8 and abs(pa3 - pa2) < 6, f"{pa2:.1f} -> {pa3:.1f}")

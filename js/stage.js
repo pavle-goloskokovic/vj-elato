@@ -124,8 +124,13 @@ export class Stage {
     if (source.kind === 'file') { nv._objectUrl = URL.createObjectURL(source.file); nv.src = nv._objectUrl; }
     else nv.src = source.url;
     nv.load();
+    // seek to the start position once the metadata is in: set earlier, the load algorithm
+    // that is still running from load() can reset it to 0
     const startAt = (meta && meta.time) || (meta && meta.in) || 0;
-    if (startAt) nv.currentTime = startAt;
+    if (startAt) {
+      const seekStart = () => { nv.currentTime = startAt; };
+      if (nv.readyState >= 1) seekStart(); else nv.addEventListener('loadedmetadata', seekStart, { once: true });
+    }
     const finish = () => { clearTimeout(timer); nv.removeEventListener('canplay', onReady); nv.removeEventListener('error', onError); };
     const fail = (why) => {
       if (!d.pending || d.pending.token !== token) return;
