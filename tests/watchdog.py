@@ -20,21 +20,27 @@ def _ps(cmd):
     except Exception: return ""
 
 def browser_processes():
-    """[(pid, working set MB)] of Playwright-launched Chrome processes."""
-    out = _ps(f"Get-CimInstance Win32_Process -Filter \"Name='chrome.exe' or Name='chrome-headless-shell.exe'\" | Where-Object {{ $_.CommandLine -like '*{MARK}*' }} | ForEach-Object {{ '{{0}} {{1}}' -f $_.ProcessId, $_.WorkingSetSize }}")
+    """[(pid, private MB, kind)] of Playwright-launched Chrome processes. Private bytes, not the
+    working set: the working set counts shared DLL pages once per process and overstates a
+    multi-process browser by hundreds of MB."""
+    out = _ps(f"Get-CimInstance Win32_Process -Filter \"Name='chrome.exe' or Name='chrome-headless-shell.exe'\" | Where-Object {{ $_.CommandLine -like '*{MARK}*' }} | ForEach-Object {{ $k = if ($_.CommandLine -match '--type=([a-z-]+)') {{ $Matches[1] }} else {{ 'browser' }}; '{{0}} {{1}} {{2}}' -f $_.ProcessId, $_.PrivatePageCount, $k }}")
     procs = []
-    for line in out.split():
-        pass
     for line in out.splitlines():
         parts = line.split()
-        if len(parts) == 2 and parts[0].isdigit(): procs.append((int(parts[0]), int(parts[1]) / 1e6))
+        if len(parts) == 3 and parts[0].isdigit(): procs.append((int(parts[0]), int(parts[1]) / 1e6, parts[2]))
     return procs
+
+def describe(procs):
+    by_kind = {}
+    for _, mb, kind in procs: by_kind[kind] = by_kind.get(kind, 0) + mb
+    return ", ".join(f"{k} {v:.0f} MB" for k, v in sorted(by_kind.items(), key=lambda x: -x[1]))
 
 def kill_browsers(reason):
     procs = browser_processes()
-    for pid, _ in procs:
+    print(f"\n  WATCHDOG: {reason}; browser was: {describe(procs)}", file=sys.stderr, flush=True)
+    for pid, _, _ in procs:
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
-    print(f"\n  WATCHDOG: {reason}; killed {len(procs)} browser process(es)", file=sys.stderr, flush=True)
+    print(f"  WATCHDOG: killed {len(procs)} browser process(es)", file=sys.stderr, flush=True)
 
 def builds_running():
     """True when something that looks like a build or install is running anywhere."""
@@ -45,9 +51,9 @@ def builds_running():
     return False
 
 class Watchdog:
-    def __init__(self, deadline_s=1500, max_mb=1500, interval_s=10):
-        self.deadline_s, self.max_mb, self.interval_s = deadline_s, max_mb, interval_s
-        self.fired = None; self._stop = threading.Event()
+    def __init__(self, deadline_s=1500, max_mb=1500, interval_s=10, trace=False):
+        self.deadline_s, self.max_mb, self.interval_s, self.trace = deadline_s, max_mb, interval_s, trace
+        self.fired = None; self._stop = threading.Event(); self.peak = 0
     def __enter__(self):
         self.t0 = time.time()
         self.thread = threading.Thread(target=self._run, daemon=True); self.thread.start()
@@ -60,6 +66,9 @@ class Watchdog:
         while not self._stop.wait(self.interval_s):
             if time.time() - self.t0 > self.deadline_s:
                 self.fired = "deadline"; kill_browsers(f"deadline of {self.deadline_s}s reached"); return
-            total = sum(mb for _, mb in browser_processes())
+            procs = browser_processes()
+            total = sum(mb for _, mb, _ in procs)
+            self.peak = max(self.peak, total)
+            if self.trace: print(f"  mem {total:.0f} MB: {describe(procs)}", file=sys.stderr, flush=True)
             if total > self.max_mb:
                 self.fired = "memory"; kill_browsers(f"browser memory {total:.0f} MB over {self.max_mb} MB"); return

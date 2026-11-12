@@ -138,7 +138,9 @@ async def reload(ctx, check, logs):
     r = await ctrl.evaluate("() => ({titles:[...document.querySelectorAll('.deck .title')].map(e=>e.textContent), hue:document.querySelector('.deck[data-deck=A] [data-param=hue]').value, fb:document.querySelector('[data-master=feedback]').value, xf:document.querySelector('#crossfade').value, pvA:document.querySelector('#pvA').currentTime, pvB:document.querySelector('#pvB').currentTime})")
     pa2 = await player.evaluate("document.getElementById('deckA').currentTime")
     check("controller reload restores clips and settings", r["titles"] == ["test.mp4", "shot_026.mp4"] and r["hue"] == "90" and r["fb"] == "0.8" and r["xf"] == "0.3", r)
-    check("controller reload leaves the player playing", pa2 > pa, f"{pa:.1f} -> {pa2:.1f}")
+    await player.wait_for_timeout(1000)
+    pa2b = await player.evaluate("document.getElementById('deckA').currentTime")
+    check("controller reload leaves the player playing", pa2b != pa2 and not await player.evaluate("document.getElementById('deckA').paused"), f"{pa:.1f} -> {pa2:.1f} -> {pa2b:.1f} (the 14 s clip may have looped)")
     # the preview is nudged to the player at most every 2 s, and the 14 s clip loops, so sample
     # for a few seconds rather than once
     synced, pair = False, None
@@ -364,7 +366,7 @@ def main():
     # the run carries its own hard limits: a deadline and a memory ceiling for the browser,
     # because a tool timeout would not stop it
     deadline = 420 * max(1, len(names)) if a.scenario != "all" else 1800
-    with Watchdog(deadline_s=deadline, max_mb=1500) as dog:
+    with Watchdog(deadline_s=deadline, max_mb=1500, trace=os.environ.get("VJ_MEMTRACE") == "1") as dog:
         # smoke/reload/crop run against plain static hosting (as on GitHub Pages: no proxy),
         # the proxy scenario against the full local server
         for flags, group in ((["--no-proxy"], [n for n in names if n not in ("proxy", "youtube", "adapt", "stick", "search", "unplug", "logging")]),
