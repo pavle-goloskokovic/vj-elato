@@ -1,5 +1,8 @@
 import { createBus } from './bus.js';
 import { Stage } from './stage.js';
+import { createLog } from './log.js';
+
+const log = createLog('player');
 
 const bus = createBus('player');
 const canvas = document.getElementById('gl');
@@ -10,6 +13,11 @@ const overlayMsg = document.getElementById('overlay-msg');
 const stage = new Stage({
   videos: { A: document.getElementById('deckA'), B: document.getElementById('deckB') },
   canvas,
+  onEvent: (e) => {
+    if (e.type === 'loadfail') log.error('deck.loadfail', `deck ${e.deck}: ${e.why}`, { title: e.meta && e.meta.title, url: e.meta && e.meta.url });
+    else if (e.type === 'error') log.error('deck.error', `deck ${e.deck}: ${e.why}`);
+    else if (e.type === 'loaded') log.info('deck.loaded', `deck ${e.deck}: ${e.meta && e.meta.title}`);
+  },
   layout: (st) => {
     const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     const w = Math.round(window.innerWidth * dpr), h = Math.round(window.innerHeight * dpr);
@@ -18,7 +26,8 @@ const stage = new Stage({
   },
 });
 window.addEventListener('resize', () => stage.relayout());
-if (!stage.renderer) console.warn('WebGL2 unavailable; running CSS-only');
+if (!stage.renderer) { console.warn('WebGL2 unavailable; running CSS-only'); log.warn('player.webgl', 'WebGL2 unavailable, CSS only'); }
+else log.info('player.gpu', stage.info || 'webgl2');
 
 let controllerSeen = 0;
 function applyBlackout() { black.style.opacity = stage.master.blackout ? 1 : 0; }
@@ -30,7 +39,15 @@ function status() {
 setInterval(status, 250);
 
 bus.on('*', () => { controllerSeen = Date.now(); overlay.classList.add('hidden'); });
-bus.on('load', (m) => stage.load(m.deck, m.source, m.meta));
+bus.on('load', (m) => { log.info('deck.load', `deck ${m.deck} <- ${m.meta && m.meta.title}`, { kind: m.source.kind, via: m.source.via }); stage.load(m.deck, m.source, m.meta); });
+// low frame rate for a while is worth a line
+let lowSince = 0;
+setInterval(() => {
+  if (!stage.renderer) return;
+  if (stage.fps && stage.fps < 20) { lowSince = lowSince || Date.now(); if (Date.now() - lowSince > 5000) { log.warn('player.fps', `${stage.fps} fps`, { gpu: stage.info }); lowSince = Date.now(); } }
+  else lowSince = 0;
+}, 2000);
+bus.on('log?', () => bus.send('log', { entries: log.entries() }));
 bus.on('play', (m) => stage.play(m.deck));
 bus.on('pause', (m) => stage.pause(m.deck));
 bus.on('restart', (m) => stage.restart(m.deck));

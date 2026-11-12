@@ -56,10 +56,17 @@ OPEN = "--no-browser" not in sys.argv
 STICK = os.path.abspath(opt("--stick", "")) if opt("--stick", "") else (os.path.dirname(ROOT) if os.path.basename(ROOT).lower() == "vj-elato" else ROOT)
 UNPLUG_FLAG = opt("--unplug-flag", "")          # tests: while this file exists the stick counts as absent
 
+_stick_state = {"present": None}
 def stick_present():
-    if UNPLUG_FLAG and os.path.exists(UNPLUG_FLAG): return False
-    try: return os.path.isdir(STICK)
-    except OSError: return False
+    if UNPLUG_FLAG and os.path.exists(UNPLUG_FLAG): present = False
+    else:
+        try: present = os.path.isdir(STICK)
+        except OSError: present = False
+    if _stick_state["present"] is not None and present != _stick_state["present"]:
+        _stick_state["present"] = present
+        logev("warn" if not present else "info", "stick", "stick removed" if not present else "stick back")
+    _stick_state["present"] = present
+    return present
 CACHE_DIR = os.path.abspath(opt("--cache-dir", os.path.join(STICK, "cache")))
 CACHE_CAP = int(float(opt("--cache-gb", "2")) * 1e9)
 RESERVE = int(float(opt("--reserve-mb", "500")) * 1e6)
@@ -141,7 +148,7 @@ class Speed:
             self.record(url, got, el)
             return got / el if el > 0 else None
         except Exception as e:
-            print(f"  probe failed: {e}"); return None
+            logev("warn", "speed.probe", f"probe failed: {e}"); return None
 
 speed = Speed()
 ADAPT = "--no-adapt" not in sys.argv
@@ -278,7 +285,7 @@ def sponsorblock(vid):
     except urllib.error.HTTPError as e:
         if e.code != 404: print(f"  sponsorblock: {e}")
     except Exception as e:
-        print(f"  sponsorblock: {e}")
+        logev("warn", "sponsorblock", f"{vid}: {e}")
     segs.sort(key=lambda s: s["start"])
     _sb_cache[vid] = (segs, time.time())
     return segs
@@ -398,14 +405,14 @@ class Cache:
                     f.write(chunk); got += len(chunk)
             speed.record(source, got, time.time() - t0)
             if got != size:
-                os.remove(part); print(f"  cache: size mismatch for {rel} ({got} of {size})"); return
+                os.remove(part); logev("warn", "cache.fetch", f"size mismatch for {rel} ({got} of {size})"); return
             os.replace(part, full)
             with self.lock:
                 self.entries[k] = {"url": url, "file": rel.replace("\\", "/"), "bytes": size, "added": time.time(), "lastUsed": time.time(), "complete": True, **({"title": title} if title else {})}
                 self.save()
             print(f"  cache: stored {rel} ({size/1e6:.1f} MB), {self.used()/1e9:.2f}/{self.cap/1e9:.1f} GB used")
         except Exception as e:
-            print(f"  cache: fetch failed for {url[:60]}: {e}")
+            logev("error", "cache.fetch", f"cache fetch failed for {url[:80]}: {e}")
         finally:
             with self.lock: self.fetching.pop(k, None)
 
@@ -458,6 +465,56 @@ def stick_path(rel):
     full = os.path.abspath(os.path.join(STICK, rel.replace("/", os.sep)))
     if not full.startswith(os.path.join(os.path.abspath(STICK), "")) or not os.path.isfile(full): return None
     return full
+
+
+# ---------- session log ----------
+# One JSON line per event, from the pages (POST /log) and from this server, into a session
+# file on the laptop (<run folder>/logs) and on the stick (<stick>/vj-elato-logs). Bounded:
+# a file stops at LOG_FILE_CAP and old sessions are pruned, more strictly on the stick.
+LOG_FILE_CAP = 2_000_000
+LOG_KEEP = {"laptop": 10, "stick": 5}
+VERSION = ""
+try: VERSION = open(os.path.join(ROOT, "version.txt"), encoding="utf-8").read().strip()
+except OSError: pass
+
+class SessionLog:
+    def __init__(self):
+        self.name = time.strftime("session-%Y%m%d-%H%M%S.jsonl")
+        self.lock = threading.Lock()
+        self.dirs = {"laptop": os.path.join(ROOT, "logs"), "stick": os.path.join(STICK, "vj-elato-logs")}
+        self.capped = set()
+        for where, d in self.dirs.items(): self.prune(where, d)
+        self.write({"ts": int(time.time() * 1000), "src": "server", "level": "info", "type": "session.start",
+                    "message": f"VJ Elato server started", "details": {"version": VERSION, "root": ROOT, "stick": STICK, "stickPresent": stick_present(),
+                    "port": PORT, "proxy": PROXY_ON, "cache": CACHE_ON, "cacheCap": CACHE_CAP, "ytdlp": bool(YTDLP), "ytMax": YT_MAX, "adapt": ADAPT, "python": sys.version.split()[0], "os": sys.platform}})
+    def prune(self, where, d):
+        try:
+            files = sorted(f for f in os.listdir(d) if f.startswith("session-") and f.endswith(".jsonl"))
+            for f in files[:-LOG_KEEP[where] + 1] if len(files) >= LOG_KEEP[where] else []:
+                os.remove(os.path.join(d, f))
+        except OSError: pass
+    def write(self, event):
+        line = json.dumps(event, ensure_ascii=False) + "\n"
+        with self.lock:
+            for where, d in self.dirs.items():
+                if where in self.capped: continue
+                if where == "stick" and not stick_present(): continue
+                try:
+                    os.makedirs(d, exist_ok=True)
+                    path = os.path.join(d, self.name)
+                    if os.path.exists(path) and os.path.getsize(path) > LOG_FILE_CAP:
+                        with open(path, "a", encoding="utf-8") as f: f.write(json.dumps({"ts": int(time.time() * 1000), "src": "server", "level": "warn", "type": "log.capped", "message": "log file reached its size cap; further events are not written here"}) + "\n")
+                        self.capped.add(where); continue
+                    with open(path, "a", encoding="utf-8") as f: f.write(line)
+                except OSError:
+                    pass
+    def current(self, where="laptop"):
+        return os.path.join(self.dirs[where], self.name)
+
+slog = None
+def logev(level, type_, message, **details):
+    print(f"  {level}: {message}")
+    if slog: slog.write({"ts": int(time.time() * 1000), "src": "server", "level": level, "type": type_, "message": message, **({"details": details} if details else {})})
 
 # ---------- handler ----------
 class Handler(SimpleHTTPRequestHandler):
@@ -513,6 +570,19 @@ class Handler(SimpleHTTPRequestHandler):
         if not PROXY_ON and u.path.startswith("/proxy"): return self.send_error(404)
         if u.path.startswith("/stick/") and not stick_present():
             return self.json({"error": "stick absent", "stick": STICK}, 503)
+        if u.path == "/log/current" or u.path == "/log/stick":
+            path = slog.current("stick" if u.path.endswith("stick") else "laptop") if slog else None
+            if not path or not os.path.isfile(path): return self.send_error(404)
+            data = open(path, "rb").read()
+            self.send_response(200); self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="{os.path.basename(path)}"')
+            self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data); return
+        if u.path == "/log/list":
+            out = {}
+            for where, d in (slog.dirs.items() if slog else []):
+                try: out[where] = sorted(f for f in os.listdir(d) if f.endswith(".jsonl"))
+                except OSError: out[where] = []
+            return self.json(out)
         if u.path == "/stick/index": return self.json(scan_stick())
         if u.path.startswith("/stick/"):
             full = stick_path(u.path[len("/stick/"):])
@@ -524,7 +594,7 @@ class Handler(SimpleHTTPRequestHandler):
                 finally: f.close()
             return
         if u.path == "/proxy": return self.proxy(u)
-        if u.path == "/proxy/info": return self.json({"proxy": True, "cache": cache.info() if cache else {"enabled": False}, "fetchOnPlay": bool(cache and cache.fetch_on_play), "stick": STICK, "youtube": bool(YTDLP), "speed": speed.mbps(), "adapt": ADAPT, "ytMax": YT_MAX, "stickLibrary": True, "stickPresent": stick_present(), "stickPath": STICK})
+        if u.path == "/proxy/info": return self.json({"proxy": True, "cache": cache.info() if cache else {"enabled": False}, "fetchOnPlay": bool(cache and cache.fetch_on_play), "stick": STICK, "youtube": bool(YTDLP), "speed": speed.mbps(), "adapt": ADAPT, "ytMax": YT_MAX, "stickLibrary": True, "stickPresent": stick_present(), "stickPath": STICK, "version": VERSION, "log": slog.name if slog else None})
         if u.path == "/proxy/resolve":
             url = urllib.parse.parse_qs(u.query).get("url", [""])[0]
             info = resolve_youtube(url)
@@ -544,6 +614,13 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception: data = {}
             if "fetchOnPlay" in data: cache.fetch_on_play = bool(data["fetchOnPlay"])
             return self.json({"fetchOnPlay": cache.fetch_on_play})
+        if u.path == "/log":
+            try: events = json.loads(body).get("events", [])
+            except Exception: events = []
+            if slog:
+                for e in events[:200]:
+                    if isinstance(e, dict) and "type" in e: slog.write({k: e[k] for k in ("ts", "src", "level", "type", "message", "details", "count") if k in e})
+            return self.json({"ok": True, "n": len(events)})
         if u.path == "/stick/collections":
             if not stick_present(): return self.json({"saved": False, "error": "stick absent"})
             try: data = json.loads(body)
@@ -573,7 +650,7 @@ class Handler(SimpleHTTPRequestHandler):
         source, title = url, None
         if youtube_id(url):
             info = resolve_youtube(url)
-            if "error" in info: self.send_error(502, f"YouTube: {info['error']}"); return
+            if "error" in info: logev("error", "youtube.resolve", f"{url[:80]}: {info['error']}"); self.send_error(502, f"YouTube: {info['error']}"); return
             url, source, title = info["key"], info["url"], info["title"]
         if cache:
             local = cache.complete_file(url)
@@ -588,6 +665,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             r = upstream(source, rng)
         except Exception as e:
+            logev("error", "proxy.upstream", f"upstream failed for {source[:80]}: {e}")
             self.send_error(502, f"upstream failed: {e}"); return
         with r:
             self.send_response(r.status)
@@ -607,6 +685,8 @@ class Handler(SimpleHTTPRequestHandler):
 if __name__ == "__main__":
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     srv.daemon_threads = True
+    slog = SessionLog()
+    print(f"  log: {slog.current()}" + (f"  and {slog.current('stick')}" if stick_present() else ""))
     url = f"http://localhost:{PORT}/"
     print(f"VJ Elato: serving {ROOT}\n  {url}   (Ctrl+C to stop)")
     print(f"  stick: {STICK}" + ("" if stick_present() else "  (not present right now)"))

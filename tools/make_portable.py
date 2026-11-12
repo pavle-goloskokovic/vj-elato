@@ -64,6 +64,11 @@ def main():
         try: os.remove(os.path.join(dest, old))
         except OSError: pass
     shutil.copy2(os.path.join(SRC, "README.md"), dest)
+    # version stamp for the session log: git commit when available, else the date
+    import subprocess, time
+    try: ver = subprocess.run(["git", "-C", SRC, "log", "-1", "--format=%h %cd", "--date=short"], capture_output=True, text=True, timeout=10).stdout.strip()
+    except Exception: ver = ""
+    open(os.path.join(dest, "version.txt"), "w", encoding="utf-8").write((ver or "unknown") + f" (packed {time.strftime('%Y-%m-%d %H:%M')})\n")
     with open(os.path.join(dest, "START-HERE.txt"), "w", encoding="utf-8") as f:
         f.write("VJ Elato, portable copy\n\n"
                 "Windows:      double-click serve.cmd\n"

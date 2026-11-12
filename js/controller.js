@@ -2,6 +2,9 @@ import { createBus } from './bus.js';
 import { loadCatalogs, destockdAll, destockdCollection, spelunkrAll, fmtBytes, fmtTime } from './catalog.js';
 import { supportsFolders, pickFolder, restoreFolder, requestAccess, scanFolder, scanServer, getFile, localThumb, saveCollections, COLLECTIONS_FILE } from './library.js';
 import { Stage, DEFAULT_PARAMS, DEFAULT_MASTER } from './stage.js';
+import { createLog } from './log.js';
+
+const log = createLog('controller');
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -193,6 +196,7 @@ const playerPill = $('#player-status'), gpuStatus = $('#gpu-status');
 state.online = navigator.onLine !== false;
 function setOnline(on) {
   state.online = on;
+  log[on ? 'info' : 'warn']('network', on ? 'online' : 'offline');
   $('#net-status').classList.toggle('hidden', on);
   if (state.tab !== 'url') render();
 }
@@ -221,7 +225,10 @@ function updateDeckStatus(name, s) {
   d.duration = s.duration || 0;
   // frozen = not paused, ready, but the time has not moved for ~3 s (a stick clip whose data vanished)
   if (!s.paused && s.ready && d.lastTime === s.time && s.time > 0) d.frozenSince = d.frozenSince || Date.now(); else d.frozenSince = 0;
-  d.stuck = !!(d.frozenSince && Date.now() - d.frozenSince > 3000);
+  const stuckNow = !!(d.frozenSince && Date.now() - d.frozenSince > 3000);
+  if (stuckNow && !d.stuck) log.warn('clip.stall', `deck ${name} frozen at ${s.time.toFixed(1)} s`, { title: d.clip && d.clip.title, via: d.source && d.source.via });
+  if (s.error && s.error !== d.lastError) log.error('clip.error', `deck ${name}: ${s.error}`, { title: d.clip && d.clip.title });
+  d.stuck = stuckNow;
   d.lastError = s.error || null;
   d.lastTime = s.time || 0;          // used to resume a reloaded player where it was
   $('.t', el).textContent = fmtTime(s.time);
@@ -239,6 +246,7 @@ function updateDeckStatus(name, s) {
       $('.title', deckEls[name]).textContent = d.clip ? d.clip.title : 'empty';
       setPaneThumb(name, d.clip);
       badge.textContent = `could not load "${failed.title}": ${s.error}`; badge.className = 'badge error';
+      log.error('clip.loadfail', `deck ${name}: "${failed.title}" ${s.error}`, { url: failed.url, kind: d.source && d.source.kind, via: d.source && d.source.via });
       persist();
     } else if (s.meta && s.meta.key === d.pendingClip.key) { d.pendingClip = null; }
   }
@@ -368,6 +376,7 @@ async function loadClip(name, clip) {
   d.pendingClip = clip;
   d.clip = clip; d.source = source; d.playing = true; d.duration = 0; d.noSeek = false; d.seekAt = 0;
   bus.send('load', { deck: name, source, meta: clipMeta(clip) });
+  log.info('clip.load', `deck ${name} <- ${clip.title}`, { source: clip.source, kind: source.kind, via: source.via, url: clip.url || clip.localPath });
   if (state.live) preview.load(name, source, clipMeta(clip));
   $('.title', deckEls[name]).textContent = clip.title;
   setPaneThumb(name, clip);
@@ -623,7 +632,7 @@ async function loadYoutube(deck, url, status) {
   try {
     const r = await fetch(new URL('proxy/resolve?url=' + encodeURIComponent(url), location.href));
     const info = await r.json();
-    if (info.error) { status.textContent = 'YouTube: ' + info.error; return; }
+    if (info.error) { status.textContent = 'YouTube: ' + info.error; log.error('youtube.resolve', info.error, { url }); return; }
     const segs = info.segments || [];
     status.textContent = `${info.title} · ${info.height}p${info.fps > 30 ? info.fps : ''}${info.speedMbps ? ` · link ${info.speedMbps} Mbps` : ''}${info.stall ? ' · may stall, lowest rendition' : ''}${segs.length ? ` · ${segs.length} skip${segs.length > 1 ? 's' : ''}` : ''}`;
     loadClip(deck, { key: 'yt:' + info.id, source: 'youtube', youtube: true, title: info.title, url: info.key, thumb: info.thumbnail || '', duration: info.duration, bytes: info.tbr && info.duration ? info.tbr * 125 * info.duration : null, stall: info.stall, segments: segs });
@@ -715,6 +724,10 @@ async function refreshProxy() {
   } catch { state.serverLost = true; }
   renderProxy();
   const present = !state.serverLost && state.proxy && state.proxy.stickPresent !== false;
+  if (!wasLost && state.serverLost) log.error('server.lost', 'local server stopped answering');
+  if (wasLost && !state.serverLost) log.info('server.back', 'local server answering again');
+  if (wasPresent && !present && !state.serverLost) log.warn('stick.removed', 'stick not reachable', { path: state.proxy && state.proxy.stickPath });
+  if (!wasPresent && present) log.info('stick.back', 'stick reachable again');
   if ((wasLost && !state.serverLost) || (!wasPresent && present)) recoverStick();
   // poll quickly while the server or the stick is missing, slowly otherwise
   clearTimeout(proxyTimer);
@@ -754,6 +767,16 @@ function renderProxy() {
 $('#fetch-on-play').addEventListener('change', async (e) => {
   try { await fetch(new URL('proxy/settings', location.href), { method: 'POST', body: JSON.stringify({ fetchOnPlay: e.target.checked }) }); } catch { /* ignore */ }
   refreshProxy();
+});
+$('#save-log').addEventListener('click', async () => {
+  if (log.isLocal && state.proxy && !state.serverLost) { await log.flush(); window.open(new URL('log/current', location.href), '_blank'); return; }
+  // web version: this page's buffer plus the player's, as one text file
+  let playerEntries = [];
+  await new Promise((res) => { const h = (m) => { playerEntries = m.entries || []; res(); }; bus.on('log', h); bus.send('log?'); setTimeout(res, 800); });
+  const all = log.entries().concat(playerEntries).sort((a, b) => a.ts - b.ts);
+  const text = all.map((e) => `${new Date(e.ts).toISOString()} ${e.level.padEnd(5)} ${e.src.padEnd(10)} ${e.type.padEnd(18)} ${e.message}${e.count > 1 ? ` (x${e.count})` : ''}${e.details ? '  ' + JSON.stringify(e.details) : ''}`).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type: 'text/plain' })); a.download = `vj-elato-log-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.txt`; a.click();
 });
 $('#clear-cache').addEventListener('click', async () => {
   if (!confirm('Delete every clip the proxy cached on the stick?')) return;

@@ -7,3 +7,6 @@ dist/
 tests/_site/
 tests/_out/
 cache/
+logs/
+vj-elato-logs/
+version.txt

@@ -30,6 +30,8 @@ Scenarios:
 - **unplug** – with the stick simulated absent (the server's `--unplug-flag`) the server reports it,
   stick requests answer 503 and the controller shows it; when it is back the library rescans and a
   playing stick clip is still playing.
+- **logging** – a load and a failed load from both pages and the server's own header land in the
+  session file on the laptop and on the stick, without status chatter.
 
 Why it is set up the way it is:
 

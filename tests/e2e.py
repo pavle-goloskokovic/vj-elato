@@ -299,7 +299,26 @@ async def unplug(ctx, check, logs):
     t2 = await player.evaluate("() => { const v = document.getElementById('deckA'); return {t: v.currentTime, paused: v.paused, src: v.currentSrc} }")
     check("stick back: pill clears, library rescanned, deck A still plays its stick clip", status.startswith("stick") and "clips" in status and not t2["paused"] and t2["t"] > t1 and "stick-test" in t2["src"], {"status": status, **t2})
 
-SCENARIOS = {"smoke": smoke, "reload": reload, "crop": crop, "proxy": proxy, "youtube": youtube, "adapt": adapt, "stick": stick, "search": search, "unplug": unplug}
+async def logging(ctx, check, logs):
+    """Events from both pages and the server land in the session file on the laptop and on the stick."""
+    import urllib.request
+    player, ctrl = await open_pages(ctx, logs)
+    await load_url(ctrl, "A", BASE + "test.mp4")
+    await load_url(ctrl, "B", BASE + "does-not-exist.mp4")
+    await ctrl.wait_for_function("document.querySelector('.pane[data-pane=B] .badge').classList.contains('error')", timeout=30000)
+    await ctrl.wait_for_timeout(3000)                      # batches flush every 2 s
+    info = json.load(urllib.request.urlopen(BASE + "proxy/info", timeout=10))
+    text = urllib.request.urlopen(BASE + "log/current", timeout=10).read().decode("utf-8")
+    lines = [json.loads(l) for l in text.splitlines() if l.strip()]
+    srcs = {l["src"] for l in lines}; types = {l["type"] for l in lines}
+    check("session file has the server header and events from both pages", "session.start" in types and {"server", "controller", "player"} <= srcs, sorted(srcs))
+    check("clip loads and the failed load are logged", "clip.load" in types and "clip.loadfail" in types and "deck.loadfail" in types, sorted(t for t in types if t.startswith(("clip", "deck"))))
+    stick_file = os.path.join(SITE, "vj-elato-logs", info["log"])
+    laptop_file = os.path.join(SITE, "vj-elato", "logs", info["log"])
+    check("the same session file exists on the laptop and on the stick", os.path.isfile(laptop_file) and os.path.isfile(stick_file) and os.path.getsize(stick_file) > 200, {"laptop": os.path.isfile(laptop_file), "stick": os.path.isfile(stick_file)})
+    check("no event is logged more than once per status tick (no chatter)", len(lines) < 60, len(lines))
+
+SCENARIOS = {"smoke": smoke, "reload": reload, "crop": crop, "proxy": proxy, "youtube": youtube, "adapt": adapt, "stick": stick, "search": search, "unplug": unplug, "logging": logging}
 
 async def run(names, keep):
     from playwright.async_api import async_playwright
@@ -339,19 +358,27 @@ def main():
     print(f"site: {site}\nclip: {clip}")
     names = list(SCENARIOS) if a.scenario == "all" else [a.scenario]
     failed = []
-    # smoke/reload/crop run against plain static hosting (as on GitHub Pages: no proxy),
-    # the proxy scenario against the full local server
-    for flags, group in ((["--no-proxy"], [n for n in names if n not in ("proxy", "youtube", "adapt", "stick", "search", "unplug")]),
-                         (["--cache-gb", "1", "--unplug-flag", os.path.join(OUT, "unplugged.flag")], [n for n in names if n in ("proxy", "youtube", "stick", "search", "unplug")]),
-                         (["--cache-gb", "1", "--fake-speed", "youtube=1.2"], [n for n in names if n == "adapt"])):
-        if not group: continue
-        srv = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "serve.py"), str(PORT), site, "--no-browser", *flags], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        try:
-            time.sleep(1.5)
-            print(f"server flags: {' '.join(flags)}")
-            failed += asyncio.run(run(group, a.keep))
-        finally:
-            srv.terminate(); srv.wait(timeout=10); time.sleep(0.5)
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from watchdog import Watchdog, builds_running
+    if builds_running(): sys.exit("a build or install is running on this machine; run the browser tests later")
+    # the run carries its own hard limits: a deadline and a memory ceiling for the browser,
+    # because a tool timeout would not stop it
+    deadline = 420 * max(1, len(names)) if a.scenario != "all" else 1800
+    with Watchdog(deadline_s=deadline, max_mb=1500) as dog:
+        # smoke/reload/crop run against plain static hosting (as on GitHub Pages: no proxy),
+        # the proxy scenario against the full local server
+        for flags, group in ((["--no-proxy"], [n for n in names if n not in ("proxy", "youtube", "adapt", "stick", "search", "unplug", "logging")]),
+                             (["--cache-gb", "1", "--unplug-flag", os.path.join(OUT, "unplugged.flag")], [n for n in names if n in ("proxy", "youtube", "stick", "search", "unplug", "logging")]),
+                             (["--cache-gb", "1", "--fake-speed", "youtube=1.2"], [n for n in names if n == "adapt"])):
+            if not group or dog.fired: continue
+            srv = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "serve.py"), str(PORT), site, "--no-browser", *flags], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                time.sleep(1.5)
+                print(f"server flags: {' '.join(flags)}")
+                failed += asyncio.run(run(group, a.keep))
+            finally:
+                srv.terminate(); srv.wait(timeout=10); time.sleep(0.5)
+        if dog.fired: failed.append(f"watchdog ({dog.fired})")
     if not a.keep: shutil.rmtree(SITE, ignore_errors=True)
     print("\n" + ("ALL PASSED" if not failed else f"FAILED: {', '.join(failed)}"))
     sys.exit(1 if failed else 0)
