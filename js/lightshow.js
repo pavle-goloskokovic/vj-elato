@@ -23,8 +23,14 @@ export const ANIMATIONS = [
       return clamp01(0.5 + 0.7 * Math.cos(d * 22 - t * 5)) * (d < 1.1 ? 1 : 0);
     } },
   { name: 'radar', seconds: 12, fn: (u, v, t, c) => {
-      // a sweep around each jog wheel, counter-rotating, with a fading trail
-      const arm = (cx, dir) => { const a = Math.atan2(v - 0.55, (u - cx) * c.aspect); let d = ((a - dir * t * 1.6) % TAU + TAU) % TAU; return Math.exp(-d * 1.8); };
+      // a sweep around each jog wheel, counter-rotating, with a fading trail; each arm stays
+      // within its own deck so the two never paint across the panel
+      const arm = (cx, dir) => {
+        const dx = (u - cx) * c.aspect, dy = v - 0.55, r = Math.hypot(dx, dy);
+        if (r > 0.62) return 0;
+        const a = Math.atan2(dy, dx); const d = ((a - dir * t * 1.6) % TAU + TAU) % TAU;
+        return Math.exp(-d * 1.8);
+      };
       return clamp01(Math.max(arm(0.21, 1), arm(0.79, -1)));
     } },
   { name: 'rain', seconds: 12, fn: (u, v, t) => {
