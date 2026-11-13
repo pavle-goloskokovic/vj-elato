@@ -44,6 +44,8 @@ export function createMidi(api) {
   // ---------- incoming ----------
   function handle(data) {
     const [s, d1, d2] = data; const type = s >> 4, ch = (s & 0xF) + 1;
+    state.lastInput = Date.now();
+    if (state.show) { state.show = false; if (api.onIdleEnd) api.onIdleEnd(); }       // any touch ends the idle show
     let msg, val, pressed = null;
     if (type === 0x9 || type === 0x8) { msg = 'note'; val = type === 0x9 ? d2 : 0; pressed = val > 0; }
     else if (type === 0xB) { msg = 'cc'; val = d2; }
@@ -128,14 +130,18 @@ export function createMidi(api) {
   // ---------- LEDs ----------
   function led(id, on) {
     const c = state.device && state.device.controls[id];
-    if (!c || !state.output || c.msg !== 'note') return;
+    if (!c || c.msg !== 'note') return;
     const want = on ? (state.device.led?.on ?? 127) : (state.device.led?.off ?? 0);
     if (state.leds.get(c.num) === want) return;
     state.leds.set(c.num, want);
+    if (state.ledLog) { state.ledLog.push([id, on]); if (state.ledLog.length > 500) state.ledLog.splice(0, 250); }
+    if (!state.output) return;
     try { state.output.send([0x90 | ((c.ch || 1) - 1), c.num, want]); } catch { /* port gone */ }
   }
+  // the idle light show writes the lights directly; state LEDs resume when it ends
+  function setLeds(map) { for (const [id, on] of Object.entries(map)) led(id, on); }
   function refreshLeds() {
-    if (!state.device || !state.output) return;
+    if (!state.device || state.show) return;
     for (const [id, role] of Object.entries(state.device.roles)) {
       if (!role.led) continue;
       const d = role.deck;
@@ -159,8 +165,9 @@ export function createMidi(api) {
     state.status = 'virtual'; state.name = dev.device + ' (virtual)'; emit();
   }
 
+  state.lastInput = Date.now(); state.show = false; state.ledLog = null;
   return {
-    connect, state, refreshLeds, allLeds, handle, useDevice,
+    connect, state, refreshLeds, allLeds, handle, useDevice, setLeds,
     onChange: (f) => listeners.add(f),
     // the LED self-test: light every button in turn so the user sees which ones the device drives
     async sweep(ms = 120) {

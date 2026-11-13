@@ -92,6 +92,8 @@ The controller speaks Web MIDI (Chrome, Edge). A device file in `midi/` describe
 | browse, LOAD A / B, BACK | library cursor, load, next tab |
 | pitch LEDs, FOLDER / FILE LEDs | deck off normal speed; load target A / B |
 
+**Idle light show.** When the controller has not been touched for ten seconds (adjustable in the lights panel), its LEDs play animations, wave, ripples, radar sweeps around the jog wheels, rain, a bouncing ball, breathing, a chase, Game of Life, sparkle, curtains, cycling in random order, until the next touch, when the state LEDs return. The device file places every LED on the panel; the animations are written for the whole panel as a function of position and time, and each LED samples its own spot, so the sparse lights still read as one picture. A preview canvas in the controller shows the virtual display with the LEDs on it, which also runs without the hardware. Button LEDs: 
+
 Knobs and faders use soft takeover: after a reload or a shift change a control only takes over once it passes the on-screen value. Button LEDs show state (playing, loop, mirror, cover, bars, shift, held effects, loaded decks); clicking the midi pill runs an LED sweep. Roles are plain JSON: edit the file to change the layout. The master gain and mic controls of the Mixtrack Pro are analog and send nothing.
 
 ## Roadmap

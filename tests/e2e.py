@@ -390,7 +390,38 @@ async def midi(ctx, check, logs):
     sel = await ctrl.evaluate("[...document.querySelectorAll('#results .card')].findIndex(c => c.classList.contains('selected'))")
     check("browse encoder moves the library cursor", sel == 2, sel)
 
-SCENARIOS = {"smoke": smoke, "reload": reload, "crop": crop, "proxy": proxy, "youtube": youtube, "adapt": adapt, "stick": stick, "search": search, "unplug": unplug, "logging": logging, "mia": mia, "midi": midi}
+async def lightshow(ctx, check, logs):
+    """The idle light show: starts after the idle time, writes animated LED frames, stops on the first
+    input and the state LEDs come back; every animation renders on the virtual display."""
+    player, ctrl = await open_pages(ctx, logs)
+    dev = json.load(open(os.path.join(ROOT, "midi", "numark-mixtrack-pro.json"), encoding="utf-8"))
+    await ctrl.evaluate("(dev) => { window.vjMidi.state.ledLog = []; window.vjMidi.useDevice(dev); }", dev)
+    await ctrl.wait_for_function("!document.querySelector('#lightshow').classList.contains('hidden')", timeout=5000)
+    check("the lights panel appears for a device with a layout", True)
+    names = await ctrl.evaluate("window.vjShow.get().animations.map(a => a.name)")
+    lit = await ctrl.evaluate("""() => { const s = window.vjShow.get(); const out = {}; for (const a of s.animations) { let n = 0; for (let t = 0; t < a.seconds; t += 0.5) { const r = s.frame(Date.now() + t * 1000, a); n += Object.values(r.on).filter(Boolean).length; } out[a.name] = n; } return out; }""")
+    check("every animation lights something over its run", all(v > 0 for v in lit.values()), lit)
+    await ctrl.evaluate("() => { document.querySelector('#show-idle').value = 2; document.querySelector('#show-idle').dispatchEvent(new Event('change')); window.vjMidi.state.lastInput = Date.now() - 5000; }")
+    await ctrl.wait_for_function("window.vjMidi.state.show === true", timeout=6000)
+    await ctrl.wait_for_timeout(2500)
+    n1 = await ctrl.evaluate("window.vjMidi.state.ledLog.length"); frames = await ctrl.evaluate("window.vjShow.frames()")
+    check("the show starts after the idle time and writes LED frames", frames > 20 and n1 > 20, {"frames": frames, "ledWrites": n1})
+    c = dev["controls"]
+    await ctrl.evaluate("([n]) => window.vjMidi.handle([0x90, n, 127])", [c["A.hot1"]["num"]]); await ctrl.evaluate("([n]) => window.vjMidi.handle([0x90, n, 0])", [c["A.hot1"]["num"]])
+    await ctrl.wait_for_timeout(600)
+    n2 = await ctrl.evaluate("window.vjMidi.state.ledLog.length")
+    last = await ctrl.evaluate("window.vjMidi.state.ledLog.slice(-60)")
+    stopped = await ctrl.evaluate("window.vjMidi.state.show === false")
+    hot1_on = any(e[0] == "A.hot1" and e[1] for e in last)
+    check("any input stops the show and the state LEDs return (hot cue 1 lit for mirror)", stopped and hot1_on, {"stopped": stopped, "hot1": hot1_on})
+    await ctrl.wait_for_timeout(1200)
+    n3 = await ctrl.evaluate("window.vjMidi.state.ledLog.length")
+    check("no more frames are written after the show stopped", n3 - n2 < 5, n3 - n2)
+    for name in ("ripples", "radar", "life"):
+        await ctrl.select_option("#show-anim", name); await ctrl.wait_for_timeout(1200)
+        await ctrl.locator("#lightshow").screenshot(path=os.path.join(OUT, f"lightshow_{name}.png"))
+
+SCENARIOS = {"smoke": smoke, "reload": reload, "crop": crop, "proxy": proxy, "youtube": youtube, "adapt": adapt, "stick": stick, "search": search, "unplug": unplug, "logging": logging, "mia": mia, "midi": midi, "lightshow": lightshow}
 
 async def run(names, keep):
     from playwright.async_api import async_playwright

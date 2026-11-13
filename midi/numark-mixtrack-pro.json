@@ -15,7 +15,8 @@
   "MASTER GAIN, MIC GAIN and MIC THROUGH are analog only and send nothing. Cue gain and Cue mix do send.",
   "Holding SCRATCH on a deck is that deck's shift: the EQ knobs become zoom / rotate / crop, the jog scrubs, the hot cues are kaleidoscope presets.",
   "Roles: do = param (absolute, soft takeover) | relative (ticks) | seek | cmd | toggle | momentary | step | set | reset | master | master-momentary | browse | load | nexttab | shift | none.",
-  "Four LEDs that are not buttons were found by lighting notes in batches: 112 and 113 beside the pitch faders, 115 FOLDER and 114 FILE beside the browse knob. They show a deck off normal speed and the current load target."
+  "Four LEDs that are not buttons were found by lighting notes in batches: 112 and 113 beside the pitch faders, 115 FOLDER and 114 FILE beside the browse knob. They show a deck off normal speed and the current load target.",
+  "layout.lights: every LED's position on the top panel, as fractions of the panel width and height, for the idle light show."
  ],
  "controls": {
   "xfader": {
@@ -979,6 +980,183 @@
    "do": "none",
    "led": "target",
    "deck": "B"
+  }
+ },
+ "layout": {
+  "aspect": 1.493,
+  "lights": {
+   "A.cue": [
+    0.4256,
+    0.48
+   ],
+   "B.cue": [
+    0.5734,
+    0.48
+   ],
+   "back": [
+    0.501,
+    0.5378
+   ],
+   "A.load": [
+    0.4345,
+    0.5422
+   ],
+   "B.load": [
+    0.5645,
+    0.5422
+   ],
+   "A.bend-": [
+    0.0347,
+    0.1496
+   ],
+   "A.bend+": [
+    0.0764,
+    0.1496
+   ],
+   "A.keylock": [
+    0.3621,
+    0.36
+   ],
+   "A.scratch": [
+    0.3591,
+    0.8
+   ],
+   "A.play": [
+    0.25,
+    0.8711
+   ],
+   "A.stutter": [
+    0.3185,
+    0.8711
+   ],
+   "A.cuebtn": [
+    0.1845,
+    0.8711
+   ],
+   "A.sync": [
+    0.1151,
+    0.8711
+   ],
+   "A.delete": [
+    0.1339,
+    0.1511
+   ],
+   "A.hot1": [
+    0.1915,
+    0.1437
+   ],
+   "A.hot2": [
+    0.249,
+    0.1437
+   ],
+   "A.hot3": [
+    0.3065,
+    0.1437
+   ],
+   "A.fx": [
+    0.1339,
+    0.2148
+   ],
+   "A.mode": [
+    0.1369,
+    0.2696
+   ],
+   "A.loopin": [
+    0.1905,
+    0.2696
+   ],
+   "A.loopout": [
+    0.248,
+    0.2696
+   ],
+   "A.reloop": [
+    0.3056,
+    0.2696
+   ],
+   "B.bend-": [
+    0.9395,
+    0.1496
+   ],
+   "B.bend+": [
+    0.9534,
+    0.1496
+   ],
+   "B.keylock": [
+    0.6389,
+    0.36
+   ],
+   "B.scratch": [
+    0.6369,
+    0.8
+   ],
+   "B.play": [
+    0.8135,
+    0.8711
+   ],
+   "B.stutter": [
+    0.8819,
+    0.8711
+   ],
+   "B.cuebtn": [
+    0.748,
+    0.8711
+   ],
+   "B.sync": [
+    0.6786,
+    0.8711
+   ],
+   "B.delete": [
+    0.6944,
+    0.1496
+   ],
+   "B.hot1": [
+    0.752,
+    0.1452
+   ],
+   "B.hot2": [
+    0.8095,
+    0.1437
+   ],
+   "B.hot3": [
+    0.8661,
+    0.1437
+   ],
+   "B.fx": [
+    0.6954,
+    0.2133
+   ],
+   "B.mode": [
+    0.6984,
+    0.2696
+   ],
+   "B.loopin": [
+    0.753,
+    0.2696
+   ],
+   "B.loopout": [
+    0.8095,
+    0.2696
+   ],
+   "B.reloop": [
+    0.8671,
+    0.2696
+   ],
+   "A.pitchled": [
+    0.0923,
+    0.283
+   ],
+   "B.pitchled": [
+    0.9127,
+    0.283
+   ],
+   "led.file": [
+    0.5446,
+    0.4993
+   ],
+   "led.folder": [
+    0.4554,
+    0.4993
+   ]
   }
  }
 }

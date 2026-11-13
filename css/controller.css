@@ -105,7 +105,9 @@ section { min-height: 0; min-width: 0; display: flex; flex-direction: column; }
 .params .hint { grid-column: 1 / -1; }
 .master { display: flex; flex-direction: column; gap: 8px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
 .master .xfade { display: flex; align-items: center; gap: 12px; }
-.master .xfade input { flex: 1; height: 28px; }
+.master .xfade input[type=range] { flex: 1; height: 28px; }
+#lightshow .xfade { flex-wrap: wrap; }
+#show-canvas { width: 100%; max-width: 600px; aspect-ratio: 1.493; background: #0b0b0e; border-radius: 6px; display: block; }
 .master-params { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
 
 @media (max-width: 900px) {

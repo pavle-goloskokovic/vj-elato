@@ -4,6 +4,7 @@ import { supportsFolders, pickFolder, restoreFolder, requestAccess, scanFolder, 
 import { Stage, DEFAULT_PARAMS, DEFAULT_MASTER } from './stage.js';
 import { createLog } from './log.js';
 import { createMidi } from './midi.js';
+import { createLightShow } from './lightshow.js';
 
 const log = createLog('controller');
 
@@ -181,7 +182,7 @@ function persist() {
       const d = state.decks[name];
       decks[name] = { clip: serializeClip(d.clip), params: d.params, playing: d.playing };
     }
-    try { localStorage.setItem(STORE_KEY, JSON.stringify({ decks, master: state.master, live: state.live, skipSegments: state.skipSegments })); } catch { /* storage blocked */ }
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ decks, master: state.master, live: state.live, skipSegments: state.skipSegments, show: state.show })); } catch { /* storage blocked */ }
   }, 300);
 }
 function loadPersisted() {
@@ -874,6 +875,7 @@ const midi = createMidi({
   targetDeck: () => $('#target-deck').value,
   nextTab: () => { const t = tabs.filter((b) => !b.classList.contains('hidden')); const i = t.findIndex((b) => b.classList.contains('active')); setTab(t[(i + 1) % t.length].dataset.tab); },
   pickup: null,
+  onIdleEnd: () => stopShow(),
 });
 window.vjMidi = midi;            // for tests and the LED self-test
 $('#target-deck').addEventListener('change', () => midi.refreshLeds());
@@ -892,6 +894,54 @@ async function initMidi() {
   } catch { /* no device files */ }
   if (navigator.requestMIDIAccess) midi.connect();
 }
+
+// ---------- idle light show ----------
+// After `idle` seconds without a touch on the controller, its lights play animations from
+// lightshow.js until any input arrives; then the state LEDs come back. The preview canvas
+// shows the same frames, so the show runs on screen even without the hardware.
+const showPanel = $('#lightshow'), showCanvas = $('#show-canvas');
+let show = null, showTimer = null, showFrames = 0;
+state.show = { enabled: true, idle: 10, preview: true };
+function ensureShow() {
+  if (show || !midi.state.device || !midi.state.device.layout) return;
+  show = createLightShow(midi.state.device.layout);
+  const sel = $('#show-anim'); sel.innerHTML = '<option value="">auto (cycle)</option>' + show.animations.map((a) => `<option value="${a.name}">${a.name}</option>`).join('');
+  showPanel.classList.remove('hidden');
+}
+function startShow() {
+  if (!show || midi.state.show) return;
+  midi.state.show = true; show.reset(); showFrames = 0;
+  log.info('midi.show', 'idle light show started');
+  showTimer = setInterval(showFrame, 1000 / 15);
+}
+function stopShow() {
+  if (!midi.state.show && !showTimer) return;
+  clearInterval(showTimer); showTimer = null; midi.state.show = false;
+  midi.refreshLeds(); $('#show-name').textContent = '';
+}
+function showFrame() {
+  if (!show) return;
+  const forced = $('#show-anim').value ? show.pick($('#show-anim').value) : null;
+  const r = showCanvas.offsetParent && state.show.preview ? show.draw(showCanvas, Date.now(), show.frame(Date.now(), forced)) : show.frame(Date.now(), forced);
+  if (midi.state.show) midi.setLeds(r.on);
+  $('#show-name').textContent = r.name;
+  showFrames++;
+}
+setInterval(() => {
+  ensureShow();
+  if (!show) return;
+  const idleFor = (Date.now() - (midi.state.lastInput || 0)) / 1000;
+  const connected = midi.state.status === 'connected' || midi.state.status === 'virtual';
+  if (state.show.enabled && connected && !midi.state.show && idleFor >= state.show.idle) startShow();
+  else if ((!state.show.enabled || !connected) && midi.state.show) stopShow();
+  // keep the preview alive when the show is off too, so the design can be watched any time
+  if (!midi.state.show && state.show.preview && showCanvas.offsetParent) { const r = show.frame(Date.now(), $('#show-anim').value ? show.pick($('#show-anim').value) : null); show.draw(showCanvas, Date.now(), r); $('#show-name').textContent = r.name + ' (preview)'; }
+}, 500);
+$('#show-enabled').addEventListener('change', (e) => { state.show.enabled = e.target.checked; persist(); if (!e.target.checked) stopShow(); });
+$('#show-idle').addEventListener('change', (e) => { state.show.idle = Math.max(2, parseInt(e.target.value, 10) || 10); persist(); });
+$('#show-preview').addEventListener('change', (e) => { state.show.preview = e.target.checked; showCanvas.classList.toggle('hidden', !e.target.checked); persist(); });
+$('#show-now').addEventListener('click', () => { ensureShow(); if (midi.state.show) stopShow(); else { midi.state.lastInput = 0; startShow(); } });
+window.vjShow = { start: startShow, stop: stopShow, frames: () => showFrames, get: () => show };
 
 // ---------- boot ----------
 function debounce(fn, ms) { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; }
@@ -920,7 +970,9 @@ function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&am
     state.master = { ...DEFAULT_MASTER, ...saved.master };
     state.live = saved.live !== false;
     state.skipSegments = saved.skipSegments !== false;
+    if (saved.show) state.show = { ...state.show, ...saved.show };
   }
+  $('#show-enabled').checked = state.show.enabled; $('#show-idle').value = state.show.idle; $('#show-preview').checked = state.show.preview;
   $('#skip-segments').checked = state.skipSegments;
   syncInputs();
   bus.send('state?');
