@@ -267,6 +267,28 @@ def youtube_search(q, n=20):
     _search_cache[key] = (out, time.time())
     return out
 
+# Moving Image Archive's own search: describe a shot in words, their index matches it against
+# the picture content. Proxied here because their API sends no CORS headers; 24 results a page.
+MIA_API = "https://www.movingimagearchive.com/api/search"
+_mia_cache = {}
+def mia_search(q, offset=0):
+    if not q: return {"error": "empty query"}
+    key = (q.lower(), offset)
+    hit = _mia_cache.get(key)
+    if hit and time.time() - hit[1] < 600: return hit[0]
+    body = json.dumps({"query": q, "color": "all", "aspectRatio": "all", "offset": offset}).encode()
+    req = urllib.request.Request(MIA_API, data=body, headers={"User-Agent": UA, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30, context=ssl_context()) as r:
+            d = json.load(r)
+    except Exception as e:
+        logev("warn", "mia.search", f"{q[:60]}: {e}")
+        return {"error": f"Moving Image Archive search failed: {e}"}
+    out = {"query": q, "offset": offset, "hasMore": bool(d.get("hasMore")),
+           "clips": [{k: c.get(k) for k in ("id", "sourceSlug", "sourceTitle", "sourceYear", "startSeconds", "endSeconds", "durationSeconds", "videoUrl", "thumbnailUrl", "colorMode", "aspectRatio", "score")} for c in d.get("clips") or []]}
+    _mia_cache[key] = (out, time.time())
+    return out
+
 # SponsorBlock: community-marked ranges (sponsor reads, intros, outros, non-music parts of
 # music videos ...) from the public API, keyed by video id. Short timeout; never blocks playback.
 SB_CATEGORIES = ["sponsor", "selfpromo", "intro", "outro", "interaction", "music_offtopic", "preview", "filler"]
@@ -602,6 +624,9 @@ class Handler(SimpleHTTPRequestHandler):
         if u.path == "/proxy/search":
             qs = urllib.parse.parse_qs(u.query)
             return self.json(youtube_search(qs.get("q", [""])[0].strip(), int(qs.get("n", ["20"])[0])))
+        if u.path == "/proxy/mia-search":
+            qs = urllib.parse.parse_qs(u.query)
+            return self.json(mia_search(qs.get("q", [""])[0].strip(), int(qs.get("offset", ["0"])[0])))
         if u.path == "/proxy/list":
             return self.json({"entries": [{"url": e["url"], "file": "cache/" + e["file"], "bytes": e["bytes"], "lastUsed": e.get("lastUsed"), "title": e.get("title")} for e in (cache.entries.values() if cache else []) if e.get("complete")]})
         return super().do_GET()

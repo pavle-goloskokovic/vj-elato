@@ -1,0 +1,935 @@
+{
+ "device": "Numark MixTrack Pro",
+ "match": [
+  "MixTrack Pro",
+  "Mixtrack Pro"
+ ],
+ "captured": "2026-11-14",
+ "led": {
+  "on": 127,
+  "off": 0
+ },
+ "notes": [
+  "All messages on MIDI channel 1. Buttons: note on 127, release note on 0. Faders and knobs: absolute 0-127.",
+  "Jog wheels, the browse knob and the six effect-row encoders send relative ticks: 1..3 clockwise, 127..125 counter-clockwise.",
+  "MASTER GAIN, MIC GAIN and MIC THROUGH are analog only and send nothing. Cue gain and Cue mix do send.",
+  "Holding SCRATCH on a deck is that deck's shift: the EQ knobs become zoom / rotate / crop, the jog scrubs, the hot cues are kaleidoscope presets.",
+  "Roles: do = param (absolute, soft takeover) | relative (ticks) | seek | cmd | toggle | momentary | step | set | reset | master | master-momentary | browse | load | nexttab | shift | none."
+ ],
+ "controls": {
+  "xfader": {
+   "label": "Crossfader",
+   "type": "fader",
+   "msg": "cc",
+   "num": 10,
+   "ch": 1
+  },
+  "A.fader": {
+   "label": "Channel fader A, the left GAIN slider",
+   "type": "fader",
+   "msg": "cc",
+   "num": 8,
+   "ch": 1
+  },
+  "B.fader": {
+   "label": "Channel fader B, the right GAIN slider",
+   "type": "fader",
+   "msg": "cc",
+   "num": 9,
+   "ch": 1
+  },
+  "A.treble": {
+   "label": "Channel A treble",
+   "type": "knob",
+   "msg": "cc",
+   "num": 16,
+   "ch": 1
+  },
+  "A.mid": {
+   "label": "Channel A mid",
+   "type": "knob",
+   "msg": "cc",
+   "num": 18,
+   "ch": 1
+  },
+  "A.bass": {
+   "label": "Channel A bass",
+   "type": "knob",
+   "msg": "cc",
+   "num": 20,
+   "ch": 1
+  },
+  "B.treble": {
+   "label": "Channel B treble",
+   "type": "knob",
+   "msg": "cc",
+   "num": 17,
+   "ch": 1
+  },
+  "B.mid": {
+   "label": "Channel B mid",
+   "type": "knob",
+   "msg": "cc",
+   "num": 19,
+   "ch": 1
+  },
+  "B.bass": {
+   "label": "Channel B bass",
+   "type": "knob",
+   "msg": "cc",
+   "num": 21,
+   "ch": 1
+  },
+  "A.cue": {
+   "label": "Channel A cue button, headphones",
+   "type": "button",
+   "msg": "note",
+   "num": 101,
+   "ch": 1
+  },
+  "B.cue": {
+   "label": "Channel B cue button",
+   "type": "button",
+   "msg": "note",
+   "num": 102,
+   "ch": 1
+  },
+  "cuegain": {
+   "label": "Cue gain knob",
+   "type": "knob",
+   "msg": "cc",
+   "num": 11,
+   "ch": 1
+  },
+  "cuemix": {
+   "label": "Cue mix knob",
+   "type": "knob",
+   "msg": "cc",
+   "num": 12,
+   "ch": 1
+  },
+  "browse.turn": {
+   "label": "Browse knob: turn it",
+   "type": "encoder",
+   "msg": "cc",
+   "num": 26,
+   "ch": 1
+  },
+  "browse.press": {
+   "label": "Browse knob: press it",
+   "type": "button",
+   "msg": "note",
+   "num": 79,
+   "ch": 1
+  },
+  "back": {
+   "label": "Back",
+   "type": "button",
+   "msg": "note",
+   "num": 105,
+   "ch": 1
+  },
+  "A.load": {
+   "label": "Load A",
+   "type": "button",
+   "msg": "note",
+   "num": 75,
+   "ch": 1
+  },
+  "B.load": {
+   "label": "Load B",
+   "type": "button",
+   "msg": "note",
+   "num": 52,
+   "ch": 1
+  },
+  "A.pitch": {
+   "label": "Deck A: pitch fader",
+   "type": "fader",
+   "msg": "cc",
+   "num": 13,
+   "ch": 1
+  },
+  "A.bend-": {
+   "label": "Deck A: pitch bend minus",
+   "type": "button",
+   "msg": "note",
+   "num": 67,
+   "ch": 1
+  },
+  "A.bend+": {
+   "label": "Deck A: pitch bend plus",
+   "type": "button",
+   "msg": "note",
+   "num": 68,
+   "ch": 1
+  },
+  "A.keylock": {
+   "label": "Deck A: keylock",
+   "type": "button",
+   "msg": "note",
+   "num": 81,
+   "ch": 1
+  },
+  "A.jog": {
+   "label": "Deck A: jog wheel, turn it",
+   "type": "jog",
+   "msg": "cc",
+   "num": 25,
+   "ch": 1
+  },
+  "A.scratch": {
+   "label": "Deck A: scratch",
+   "type": "button",
+   "msg": "note",
+   "num": 72,
+   "ch": 1
+  },
+  "A.play": {
+   "label": "Deck A: play / pause",
+   "type": "button",
+   "msg": "note",
+   "num": 59,
+   "ch": 1
+  },
+  "A.stutter": {
+   "label": "Deck A: stutter",
+   "type": "button",
+   "msg": "note",
+   "num": 74,
+   "ch": 1
+  },
+  "A.cuebtn": {
+   "label": "Deck A: cue",
+   "type": "button",
+   "msg": "note",
+   "num": 51,
+   "ch": 1
+  },
+  "A.sync": {
+   "label": "Deck A: sync",
+   "type": "button",
+   "msg": "note",
+   "num": 64,
+   "ch": 1
+  },
+  "A.delete": {
+   "label": "Deck A: delete, top row first button",
+   "type": "button",
+   "msg": "note",
+   "num": 89,
+   "ch": 1
+  },
+  "A.hot1": {
+   "label": "Deck A: hot cue 1",
+   "type": "button",
+   "msg": "note",
+   "num": 90,
+   "ch": 1
+  },
+  "A.hot2": {
+   "label": "Deck A: hot cue 2",
+   "type": "button",
+   "msg": "note",
+   "num": 91,
+   "ch": 1
+  },
+  "A.hot3": {
+   "label": "Deck A: hot cue 3",
+   "type": "button",
+   "msg": "note",
+   "num": 92,
+   "ch": 1
+  },
+  "A.fx": {
+   "label": "Deck A: effect on/off, second row first button",
+   "type": "button",
+   "msg": "note",
+   "num": 99,
+   "ch": 1
+  },
+  "A.select": {
+   "label": "Deck A: effect select encoder, turn it",
+   "type": "encoder",
+   "msg": "cc",
+   "num": 27,
+   "ch": 1
+  },
+  "A.ctrl1": {
+   "label": "Deck A: effect control encoder left, turn it",
+   "type": "encoder",
+   "msg": "cc",
+   "num": 28,
+   "ch": 1
+  },
+  "A.ctrl2": {
+   "label": "Deck A: effect control encoder right, turn it",
+   "type": "encoder",
+   "msg": "cc",
+   "num": 29,
+   "ch": 1
+  },
+  "A.mode": {
+   "label": "Deck A: mode, third row first button",
+   "type": "button",
+   "msg": "note",
+   "num": 97,
+   "ch": 1
+  },
+  "A.loopin": {
+   "label": "Deck A: loop IN / 1/2, third row second button",
+   "type": "button",
+   "msg": "note",
+   "num": 83,
+   "ch": 1
+  },
+  "A.loopout": {
+   "label": "Deck A: loop OUT / 1 BAR, third row third button",
+   "type": "button",
+   "msg": "note",
+   "num": 84,
+   "ch": 1
+  },
+  "A.reloop": {
+   "label": "Deck A: RELOOP / 2X, third row fourth button",
+   "type": "button",
+   "msg": "note",
+   "num": 85,
+   "ch": 1
+  },
+  "B.pitch": {
+   "label": "Deck B: pitch fader",
+   "type": "fader",
+   "msg": "cc",
+   "num": 14,
+   "ch": 1
+  },
+  "B.bend-": {
+   "label": "Deck B: pitch bend minus",
+   "type": "button",
+   "msg": "note",
+   "num": 69,
+   "ch": 1
+  },
+  "B.bend+": {
+   "label": "Deck B: pitch bend plus",
+   "type": "button",
+   "msg": "note",
+   "num": 70,
+   "ch": 1
+  },
+  "B.keylock": {
+   "label": "Deck B: keylock",
+   "type": "button",
+   "msg": "note",
+   "num": 82,
+   "ch": 1
+  },
+  "B.jog": {
+   "label": "Deck B: jog wheel, turn it",
+   "type": "jog",
+   "msg": "cc",
+   "num": 24,
+   "ch": 1
+  },
+  "B.scratch": {
+   "label": "Deck B: scratch",
+   "type": "button",
+   "msg": "note",
+   "num": 80,
+   "ch": 1
+  },
+  "B.play": {
+   "label": "Deck B: play / pause",
+   "type": "button",
+   "msg": "note",
+   "num": 66,
+   "ch": 1
+  },
+  "B.stutter": {
+   "label": "Deck B: stutter",
+   "type": "button",
+   "msg": "note",
+   "num": 76,
+   "ch": 1
+  },
+  "B.cuebtn": {
+   "label": "Deck B: cue",
+   "type": "button",
+   "msg": "note",
+   "num": 60,
+   "ch": 1
+  },
+  "B.sync": {
+   "label": "Deck B: sync",
+   "type": "button",
+   "msg": "note",
+   "num": 71,
+   "ch": 1
+  },
+  "B.delete": {
+   "label": "Deck B: delete, top row first button",
+   "type": "button",
+   "msg": "note",
+   "num": 93,
+   "ch": 1
+  },
+  "B.hot1": {
+   "label": "Deck B: hot cue 1",
+   "type": "button",
+   "msg": "note",
+   "num": 94,
+   "ch": 1
+  },
+  "B.hot2": {
+   "label": "Deck B: hot cue 2",
+   "type": "button",
+   "msg": "note",
+   "num": 95,
+   "ch": 1
+  },
+  "B.hot3": {
+   "label": "Deck B: hot cue 3",
+   "type": "button",
+   "msg": "note",
+   "num": 96,
+   "ch": 1
+  },
+  "B.fx": {
+   "label": "Deck B: effect on/off, second row first button",
+   "type": "button",
+   "msg": "note",
+   "num": 100,
+   "ch": 1
+  },
+  "B.select": {
+   "label": "Deck B: effect select encoder, turn it",
+   "type": "encoder",
+   "msg": "cc",
+   "num": 30,
+   "ch": 1
+  },
+  "B.ctrl1": {
+   "label": "Deck B: effect control encoder left, turn it",
+   "type": "encoder",
+   "msg": "cc",
+   "num": 31,
+   "ch": 1
+  },
+  "B.ctrl2": {
+   "label": "Deck B: effect control encoder right, turn it",
+   "type": "encoder",
+   "msg": "cc",
+   "num": 32,
+   "ch": 1
+  },
+  "B.mode": {
+   "label": "Deck B: mode, third row first button",
+   "type": "button",
+   "msg": "note",
+   "num": 98,
+   "ch": 1
+  },
+  "B.loopin": {
+   "label": "Deck B: loop IN / 1/2, third row second button",
+   "type": "button",
+   "msg": "note",
+   "num": 86,
+   "ch": 1
+  },
+  "B.loopout": {
+   "label": "Deck B: loop OUT / 1 BAR, third row third button",
+   "type": "button",
+   "msg": "note",
+   "num": 87,
+   "ch": 1
+  },
+  "B.reloop": {
+   "label": "Deck B: RELOOP / 2X, third row fourth button",
+   "type": "button",
+   "msg": "note",
+   "num": 88,
+   "ch": 1
+  },
+  "A.jogtouch": {
+   "label": "Deck A jog wheel touch",
+   "type": "button",
+   "msg": "note",
+   "num": 78,
+   "ch": 1
+  },
+  "B.jogtouch": {
+   "label": "Deck B jog wheel touch",
+   "type": "button",
+   "msg": "note",
+   "num": 77,
+   "ch": 1
+  }
+ },
+ "roles": {
+  "xfader": {
+   "do": "master",
+   "param": "crossfade"
+  },
+  "cuegain": {
+   "do": "master",
+   "param": "feedback"
+  },
+  "cuemix": {
+   "do": "master",
+   "param": "strobe"
+  },
+  "A.cue": {
+   "do": "master-momentary",
+   "param": "blackout",
+   "value": true,
+   "led": "held"
+  },
+  "B.cue": {
+   "do": "master-momentary",
+   "param": "strobe",
+   "value": 8,
+   "led": "held"
+  },
+  "browse.turn": {
+   "do": "browse"
+  },
+  "browse.press": {
+   "do": "load",
+   "deck": "target"
+  },
+  "back": {
+   "do": "nexttab"
+  },
+  "A.load": {
+   "do": "load",
+   "deck": "A",
+   "led": "hasclip"
+  },
+  "B.load": {
+   "do": "load",
+   "deck": "B",
+   "led": "hasclip"
+  },
+  "A.fader": {
+   "do": "param",
+   "deck": "A",
+   "param": "opacity"
+  },
+  "A.pitch": {
+   "do": "param",
+   "deck": "A",
+   "param": "speed",
+   "curve": "pitch",
+   "invert": true
+  },
+  "A.treble": {
+   "do": "param",
+   "deck": "A",
+   "param": "hue",
+   "shift": {
+    "do": "param",
+    "deck": "A",
+    "param": "zoom"
+   }
+  },
+  "A.mid": {
+   "do": "param",
+   "deck": "A",
+   "param": "saturate",
+   "shift": {
+    "do": "param",
+    "deck": "A",
+    "param": "rotate"
+   }
+  },
+  "A.bass": {
+   "do": "param",
+   "deck": "A",
+   "param": "contrast",
+   "shift": {
+    "do": "param",
+    "deck": "A",
+    "param": "cropX"
+   }
+  },
+  "A.jog": {
+   "do": "relative",
+   "deck": "A",
+   "param": "rotate",
+   "step": 2,
+   "shift": {
+    "do": "seek",
+    "deck": "A",
+    "step": 0.5
+   }
+  },
+  "A.scratch": {
+   "do": "shift",
+   "deck": "A",
+   "led": "shift"
+  },
+  "A.play": {
+   "do": "cmd",
+   "deck": "A",
+   "cmd": "playpause",
+   "led": "playing"
+  },
+  "A.cuebtn": {
+   "do": "cmd",
+   "deck": "A",
+   "cmd": "restart"
+  },
+  "A.sync": {
+   "do": "toggle",
+   "deck": "A",
+   "param": "loop",
+   "led": "param"
+  },
+  "A.stutter": {
+   "do": "momentary",
+   "deck": "A",
+   "param": "invert",
+   "value": 1,
+   "led": "held"
+  },
+  "A.bend-": {
+   "do": "step",
+   "deck": "A",
+   "param": "kaleido",
+   "dir": -1
+  },
+  "A.bend+": {
+   "do": "step",
+   "deck": "A",
+   "param": "kaleido",
+   "dir": 1
+  },
+  "A.keylock": {
+   "do": "toggle",
+   "deck": "A",
+   "param": "cropX",
+   "on": 0.125,
+   "off": 0,
+   "led": "param"
+  },
+  "A.delete": {
+   "do": "reset",
+   "deck": "A"
+  },
+  "A.hot1": {
+   "do": "toggle",
+   "deck": "A",
+   "param": "mirror",
+   "on": 1,
+   "off": 0,
+   "led": "param",
+   "shift": {
+    "do": "toggle",
+    "deck": "A",
+    "param": "kaleido",
+    "on": 3,
+    "off": 0
+   }
+  },
+  "A.hot2": {
+   "do": "toggle",
+   "deck": "A",
+   "param": "mirror",
+   "on": 2,
+   "off": 0,
+   "led": "param",
+   "shift": {
+    "do": "toggle",
+    "deck": "A",
+    "param": "kaleido",
+    "on": 6,
+    "off": 0
+   }
+  },
+  "A.hot3": {
+   "do": "toggle",
+   "deck": "A",
+   "param": "mirror",
+   "on": 3,
+   "off": 0,
+   "led": "param",
+   "shift": {
+    "do": "toggle",
+    "deck": "A",
+    "param": "kaleido",
+    "on": 8,
+    "off": 0
+   }
+  },
+  "A.fx": {
+   "do": "momentary",
+   "deck": "A",
+   "param": "kaleido",
+   "value": 6,
+   "led": "held"
+  },
+  "A.select": {
+   "do": "relative",
+   "deck": "A",
+   "param": "pixelate",
+   "step": 0.02
+  },
+  "A.ctrl1": {
+   "do": "relative",
+   "deck": "A",
+   "param": "rgbShift",
+   "step": 0.02
+  },
+  "A.ctrl2": {
+   "do": "relative",
+   "deck": "A",
+   "param": "posterize",
+   "step": 1
+  },
+  "A.mode": {
+   "do": "toggle",
+   "deck": "A",
+   "param": "fit",
+   "on": "cover",
+   "off": "contain",
+   "led": "param"
+  },
+  "A.loopin": {
+   "do": "momentary",
+   "deck": "A",
+   "param": "zoom",
+   "value": 1.5,
+   "led": "held"
+  },
+  "A.loopout": {
+   "do": "momentary",
+   "deck": "A",
+   "param": "zoom",
+   "value": 2.5,
+   "led": "held"
+  },
+  "A.reloop": {
+   "do": "set",
+   "deck": "A",
+   "params": {
+    "zoom": 1,
+    "rotate": 0
+   },
+   "led": "held"
+  },
+  "A.jogtouch": {
+   "do": "none"
+  },
+  "B.fader": {
+   "do": "param",
+   "deck": "B",
+   "param": "opacity"
+  },
+  "B.pitch": {
+   "do": "param",
+   "deck": "B",
+   "param": "speed",
+   "curve": "pitch",
+   "invert": true
+  },
+  "B.treble": {
+   "do": "param",
+   "deck": "B",
+   "param": "hue",
+   "shift": {
+    "do": "param",
+    "deck": "B",
+    "param": "zoom"
+   }
+  },
+  "B.mid": {
+   "do": "param",
+   "deck": "B",
+   "param": "saturate",
+   "shift": {
+    "do": "param",
+    "deck": "B",
+    "param": "rotate"
+   }
+  },
+  "B.bass": {
+   "do": "param",
+   "deck": "B",
+   "param": "contrast",
+   "shift": {
+    "do": "param",
+    "deck": "B",
+    "param": "cropX"
+   }
+  },
+  "B.jog": {
+   "do": "relative",
+   "deck": "B",
+   "param": "rotate",
+   "step": 2,
+   "shift": {
+    "do": "seek",
+    "deck": "B",
+    "step": 0.5
+   }
+  },
+  "B.scratch": {
+   "do": "shift",
+   "deck": "B",
+   "led": "shift"
+  },
+  "B.play": {
+   "do": "cmd",
+   "deck": "B",
+   "cmd": "playpause",
+   "led": "playing"
+  },
+  "B.cuebtn": {
+   "do": "cmd",
+   "deck": "B",
+   "cmd": "restart"
+  },
+  "B.sync": {
+   "do": "toggle",
+   "deck": "B",
+   "param": "loop",
+   "led": "param"
+  },
+  "B.stutter": {
+   "do": "momentary",
+   "deck": "B",
+   "param": "invert",
+   "value": 1,
+   "led": "held"
+  },
+  "B.bend-": {
+   "do": "step",
+   "deck": "B",
+   "param": "kaleido",
+   "dir": -1
+  },
+  "B.bend+": {
+   "do": "step",
+   "deck": "B",
+   "param": "kaleido",
+   "dir": 1
+  },
+  "B.keylock": {
+   "do": "toggle",
+   "deck": "B",
+   "param": "cropX",
+   "on": 0.125,
+   "off": 0,
+   "led": "param"
+  },
+  "B.delete": {
+   "do": "reset",
+   "deck": "B"
+  },
+  "B.hot1": {
+   "do": "toggle",
+   "deck": "B",
+   "param": "mirror",
+   "on": 1,
+   "off": 0,
+   "led": "param",
+   "shift": {
+    "do": "toggle",
+    "deck": "B",
+    "param": "kaleido",
+    "on": 3,
+    "off": 0
+   }
+  },
+  "B.hot2": {
+   "do": "toggle",
+   "deck": "B",
+   "param": "mirror",
+   "on": 2,
+   "off": 0,
+   "led": "param",
+   "shift": {
+    "do": "toggle",
+    "deck": "B",
+    "param": "kaleido",
+    "on": 6,
+    "off": 0
+   }
+  },
+  "B.hot3": {
+   "do": "toggle",
+   "deck": "B",
+   "param": "mirror",
+   "on": 3,
+   "off": 0,
+   "led": "param",
+   "shift": {
+    "do": "toggle",
+    "deck": "B",
+    "param": "kaleido",
+    "on": 8,
+    "off": 0
+   }
+  },
+  "B.fx": {
+   "do": "momentary",
+   "deck": "B",
+   "param": "kaleido",
+   "value": 6,
+   "led": "held"
+  },
+  "B.select": {
+   "do": "relative",
+   "deck": "B",
+   "param": "pixelate",
+   "step": 0.02
+  },
+  "B.ctrl1": {
+   "do": "relative",
+   "deck": "B",
+   "param": "rgbShift",
+   "step": 0.02
+  },
+  "B.ctrl2": {
+   "do": "relative",
+   "deck": "B",
+   "param": "posterize",
+   "step": 1
+  },
+  "B.mode": {
+   "do": "toggle",
+   "deck": "B",
+   "param": "fit",
+   "on": "cover",
+   "off": "contain",
+   "led": "param"
+  },
+  "B.loopin": {
+   "do": "momentary",
+   "deck": "B",
+   "param": "zoom",
+   "value": 1.5,
+   "led": "held"
+  },
+  "B.loopout": {
+   "do": "momentary",
+   "deck": "B",
+   "param": "zoom",
+   "value": 2.5,
+   "led": "held"
+  },
+  "B.reloop": {
+   "do": "set",
+   "deck": "B",
+   "params": {
+    "zoom": 1,
+    "rotate": 0
+   },
+   "led": "held"
+  },
+  "B.jogtouch": {
+   "do": "none"
+  }
+ }
+}

@@ -69,3 +69,33 @@ spelunkr = {"generated": time.strftime("%Y-%m-%d"), "source": "spelunkr.tv lineu
             "base": "https://archive.org/download/", "thumbBase": "https://archive.org/services/img/", "channels": channels}
 json.dump(spelunkr, open(os.path.join(out, "spelunkr.json"), "w", encoding="utf-8"), separators=(",", ":"), ensure_ascii=False)
 print("spelunkr: channels", len(channels), "items", n_items)
+
+# ---------- Moving Image Archive ----------
+# clips: [sourceIdx, startMs, endMs, colour(1=colour), aspect("4:3"...), path]; the thumbnail is the
+# same path under /thumbnails/ with .jpg, which the build asserts for every clip.
+try:
+    mia_clips = rd("mia_clips.json"); mia_cols = rd("mia_collections.json")
+except FileNotFoundError:
+    mia_clips = None
+if mia_clips:
+    MIA_BASE = "https://pub-075ff01374c04555b51c9bc50f258b42.r2.dev/"
+    sources, src_index, clips, clip_index = [], {}, [], {}
+    for cid, c in sorted(mia_clips.items(), key=lambda kv: (kv[1].get("sourceTitle") or "", kv[1].get("startSeconds") or 0)):
+        s = c["sourceSlug"]
+        if s not in src_index:
+            src_index[s] = len(sources); sources.append({"slug": s, "title": c.get("sourceTitle") or s, "year": c.get("sourceYear")})
+        assert c["videoUrl"].startswith(MIA_BASE), c["videoUrl"]
+        path = c["videoUrl"][len(MIA_BASE):]
+        derived = MIA_BASE + path.replace("/clips/", "/thumbnails/").rsplit(".", 1)[0] + ".jpg"
+        rec = [src_index[s], int(round((c.get("startSeconds") or 0) * 1000)), int(round((c.get("endSeconds") or 0) * 1000)),
+               1 if c.get("colorMode") == "color" else 0, c.get("aspectRatio") or "", path]
+        if c.get("thumbnailUrl") and c["thumbnailUrl"] != derived:          # a handful differ: keep theirs
+            rec.append(c["thumbnailUrl"][len(MIA_BASE):] if c["thumbnailUrl"].startswith(MIA_BASE) else c["thumbnailUrl"])
+        clip_index[cid] = len(clips)
+        clips.append(rec)
+    collections = [{"slug": col["slug"], "name": col["name"].replace("| Moving Image Archive", "").strip(),
+                    "clips": sorted(clip_index[i] for i in col["ids"] if i in clip_index)} for col in mia_cols]
+    mia = {"generated": time.strftime("%Y-%m-%d"), "source": "movingimagearchive.com", "base": MIA_BASE,
+           "sources": sources, "clips": clips, "collections": collections}
+    json.dump(mia, open(os.path.join(out, "mia.json"), "w", encoding="utf-8"), separators=(",", ":"), ensure_ascii=False)
+    print("mia: sources", len(sources), "clips", len(clips), "collections", len(collections))

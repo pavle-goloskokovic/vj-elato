@@ -7,6 +7,7 @@ A two-tab browser VJ tool. One tab is the **player** (goes on the projector), th
 - **Local clips** from a folder you pick (a USB stick, say). Chrome and Edge remember the folder between sessions.
 - **Destockd** – 39,001 public domain shots cut from 648 FedFlix films, played straight from destockd.com. The 12 curated collections (658 clips, 8.9 GB) are the natural "greatest hits" to keep on a stick; the tool matches local copies to catalog entries automatically.
 - **Spelunkr** – the 34 channels of spelunkr.tv, 5,222 archive.org items with in/out points, streamed from archive.org.
+- **Moving Image Archive** – movingimagearchive.com, public domain films cut by the shot (640x480), 24 curated collections (film grain, countdowns, glowing lines, objects on black, cursors, cats, technology ...) plus every shot in their listing, streamed from their Cloudflare bucket. With the local server their **describe a shot** search is available: it matches words against the picture, not the title.
 - **Any URL** of a video file.
 
 ## Use
@@ -70,6 +71,27 @@ The Stick tab's filter lists, besides every file: your own collections from `vj-
 Pages is published by the workflow, not from the branch, so the scan data and tests never go to the site. Pushes that touch only `data/` or `tests/` do not redeploy.
 
 The footage is public domain, hosted by the Internet Archive and indexed by two small independent sites. Donate to them if you use this.
+
+## MIDI
+
+The controller speaks Web MIDI (Chrome, Edge). A device file in `midi/` describes a controller: its physical controls (message numbers, captured with a guided wizard) and the roles they play. `midi/numark-mixtrack-pro.json` is the Numark Mixtrack Pro, laid out as an effects surface:
+
+| | |
+|---|---|
+| crossfader, channel faders | crossfade, deck opacity |
+| pitch faders | deck speed, centre = normal, ends = half and double |
+| treble, mid, bass | hue, saturation, contrast; with SCRATCH held: zoom, rotate, crop |
+| jog wheels | rotate the picture; with SCRATCH held: scrub |
+| effect SELECT / CONTROL encoders | pixelate, RGB shift, posterize |
+| EFFECT button | hold for kaleidoscope |
+| hot cues 1-3 | mirror modes; with SCRATCH: kaleidoscope presets |
+| PLAY, CUE, SYNC, STUTTER | play-pause, restart, loop, hold for invert |
+| pitch bend, KEYLOCK, MODE, DELETE | kaleido step, 4:3 bars, cover, reset fx |
+| loop IN / OUT / RELOOP | hold for zoom 1.5 / 2.5, reset zoom and rotate |
+| cue gain, cue mix, headphone cue A / B | feedback, strobe rate, hold for blackout / strobe burst |
+| browse, LOAD A / B, BACK | library cursor, load, next tab |
+
+Knobs and faders use soft takeover: after a reload or a shift change a control only takes over once it passes the on-screen value. Button LEDs show state (playing, loop, mirror, cover, bars, shift, held effects, loaded decks); clicking the midi pill runs an LED sweep. Roles are plain JSON: edit the file to change the layout. The master gain and mic controls of the Mixtrack Pro are analog and send nothing.
 
 ## Roadmap
 

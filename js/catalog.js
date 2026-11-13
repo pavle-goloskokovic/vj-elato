@@ -3,11 +3,41 @@
 // index can refer to it regardless of where it is played from.
 
 export async function loadCatalogs(base = './catalog/') {
-  const [destockd, spelunkr] = await Promise.all([
+  const [destockd, spelunkr, mia] = await Promise.all([
     fetch(base + 'destockd.json').then((r) => r.json()),
     fetch(base + 'spelunkr.json').then((r) => r.json()),
+    fetch(base + 'mia.json').then((r) => (r.ok ? r.json() : null)).catch(() => null),
   ]);
-  return { destockd, spelunkr };
+  return { destockd, spelunkr, mia };
+}
+
+// ---------- Moving Image Archive ----------
+// clips: [sourceIdx, startMs, endMs, colour, aspect, path]; thumbnail = same path under /thumbnails/ as .jpg
+export function miaClip(cat, i) {
+  const [si, startMs, endMs, colour, aspect, path, thumbPath] = cat.clips[i];
+  const src = cat.sources[si];
+  return {
+    key: `mia:${path}`,
+    source: 'mia',
+    title: `${src.title}${src.year ? ' (' + src.year + ')' : ''} · ${fmtTime(startMs / 1000)}`,
+    film: src.title, year: src.year, duration: (endMs - startMs) / 1000, colour: !!colour, aspect,
+    url: cat.base + path,
+    thumb: thumbPath ? (thumbPath.startsWith('http') ? thumbPath : cat.base + thumbPath) : cat.base + path.replace('/clips/', '/thumbnails/').replace(/\.[a-z0-9]+$/, '.jpg'),
+  };
+}
+export function* miaAll(cat) { for (let i = 0; i < cat.clips.length; i++) yield miaClip(cat, i); }
+export function miaCollection(cat, slug) {
+  const col = cat.collections.find((c) => c.slug === slug);
+  return col ? col.clips.map((i) => ({ ...miaClip(cat, i), collection: slug })) : [];
+}
+// a clip as the site's search API returns it (through the local server)
+export function miaFromApi(c) {
+  return {
+    key: `mia:${c.videoUrl.replace(/^https?:\/\/[^/]+\//, '')}`, source: 'mia',
+    title: `${c.sourceTitle}${c.sourceYear ? ' (' + c.sourceYear + ')' : ''} · ${fmtTime(c.startSeconds || 0)}`,
+    film: c.sourceTitle, year: c.sourceYear, duration: c.durationSeconds, colour: c.colorMode === 'color', aspect: c.aspectRatio,
+    url: c.videoUrl, thumb: c.thumbnailUrl, score: c.score,
+  };
 }
 
 export const shotName = (n) => 'shot_' + String(n).padStart(3, '0');

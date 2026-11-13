@@ -13,7 +13,7 @@ import io, os, shutil, sys, urllib.request, zipfile
 
 SRC = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PAGES = ["index.html", "player.html", "controller.html"]
-DIRS = ["css", "js", "catalog"]
+DIRS = ["css", "js", "catalog", "midi"]
 SERVE = ["serve.py", "serve.cmd", "serve.sh"]
 PY_VERSION = "3.13.10"
 PY_URL = f"https://www.python.org/ftp/python/{PY_VERSION}/python-{PY_VERSION}-embed-amd64.zip"

@@ -14,6 +14,7 @@ on:
       - css/**
       - js/**
       - catalog/**
+      - midi/**
       - tools/make_portable.py
       - tools/serve.*
       - README.md

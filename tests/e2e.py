@@ -320,7 +320,77 @@ async def logging(ctx, check, logs):
     check("the same session file exists on the laptop and on the stick", os.path.isfile(laptop_file) and os.path.isfile(stick_file) and os.path.getsize(stick_file) > 200, {"laptop": os.path.isfile(laptop_file), "stick": os.path.isfile(stick_file)})
     check("no event is logged more than once per status tick (no chatter)", len(lines) < 60, len(lines))
 
-SCENARIOS = {"smoke": smoke, "reload": reload, "crop": crop, "proxy": proxy, "youtube": youtube, "adapt": adapt, "stick": stick, "search": search, "unplug": unplug, "logging": logging}
+async def mia(ctx, check, logs):
+    """Moving Image Archive tab: collections from the catalog, a clip plays, and (with the server) the
+    describe-a-shot search returns picture matches."""
+    import urllib.request
+    player, ctrl = await open_pages(ctx, logs)
+    await ctrl.click(".tabs button[data-tab=mia]")
+    await ctrl.wait_for_function("document.querySelectorAll('#results .card').length > 20")
+    n = await ctrl.evaluate("document.querySelectorAll('#results .card').length")
+    thumb = await ctrl.evaluate("document.querySelector('#results .card img').src")
+    check("collections render with r2 thumbnails", n > 20 and "r2.dev" in thumb and "/thumbnails/" in thumb, f"{n} cards, {thumb[:60]}")
+    await ctrl.select_option("#filter", "col:film-countdowns")
+    await ctrl.wait_for_timeout(500)
+    n2 = await ctrl.evaluate("document.querySelectorAll('#results .card').length")
+    check("a collection filter narrows the list", 0 < n2 < n, n2)
+    await ctrl.select_option("#target-deck", "B"); await ctrl.click("#results .card >> nth=0")
+    await ctrl.wait_for_function(DECK_READY, arg="B", timeout=90000); await ctrl.wait_for_timeout(1500)
+    st = await ctrl.evaluate(PLAYER_STATUS)
+    info = json.load(urllib.request.urlopen(BASE + "proxy/info", timeout=10)) if await ctrl.evaluate("!document.querySelector('#proxy-status').classList.contains('hidden')") else None
+    expect = "gl" if info else "css"
+    check(f"a Moving Image clip plays ({'through the proxy on WebGL' if info else 'as a CSS layer on the web'})", st["decks"]["B"]["mode"] == expect and not st["decks"]["B"]["error"] and (st["decks"]["B"]["duration"] or 0) > 0.5, f"mode={st['decks']['B']['mode']} err={st['decks']['B']['error']}")
+    if info:
+        await ctrl.select_option("#filter", "describe")
+        await ctrl.fill("#search", "a crowd of people cheering"); await ctrl.press("#search", "Enter")
+        await ctrl.wait_for_function("document.querySelectorAll('#results .card').length >= 5", timeout=90000)
+        subs = await ctrl.evaluate("[...document.querySelectorAll('#results .card .sub')].slice(0,3).map(e => e.textContent)")
+        check("describe-a-shot search returns ranked picture matches", all("match" in s for s in subs), subs)
+
+async def midi(ctx, check, logs):
+    """The MIDI engine driven with synthetic messages from the Mixtrack Pro map: faders, soft takeover,
+    toggles, momentary buttons, the shift layer and the browse encoder."""
+    player, ctrl = await open_pages(ctx, logs)
+    await load_url(ctrl, "A", BASE + "test.mp4"); await ctrl.wait_for_timeout(1000)
+    dev = json.load(open(os.path.join(ROOT, "midi", "numark-mixtrack-pro.json"), encoding="utf-8"))
+    await ctrl.evaluate("(dev) => window.vjMidi.useDevice(dev)", dev)
+    pill = await ctrl.evaluate("document.querySelector('#midi-status').textContent")
+    check("engine accepts the device map", "virtual" in pill, pill)
+    c = dev["controls"]
+    send = lambda name, val: ctrl.evaluate("([n,v]) => window.vjMidi.handle([0xB0, n, v])", [c[name]["num"], val])
+    note = lambda name, on: ctrl.evaluate("([n,v]) => window.vjMidi.handle([0x90, n, v])", [c[name]["num"], 127 if on else 0])
+    # every absolute control needs to pass the on-screen value once (soft takeover): the crossfade is at 0
+    await send("xfader", 0); await send("xfader", 64); await ctrl.wait_for_timeout(200)
+    check("crossfader moves the master crossfade", abs(float(await ctrl.evaluate("document.querySelector('#crossfade').value")) - 0.5) < 0.02)
+    # soft takeover: opacity is 1.0, a fader sitting at 10 must not jump it; passing through engages
+    await send("A.fader", 10); await ctrl.wait_for_timeout(100)
+    op1 = await ctrl.evaluate("document.querySelector('.deck[data-deck=A] [data-param=opacity]').value")
+    for v in (60, 100, 127, 110): await send("A.fader", v)
+    await ctrl.wait_for_timeout(200)
+    op2 = await ctrl.evaluate("document.querySelector('.deck[data-deck=A] [data-param=opacity]').value")
+    check("soft takeover: no jump until the fader passes the on-screen value, then it follows", float(op1) == 1 and abs(float(op2) - 110 / 127) < 0.02, (op1, op2))
+    await note("A.hot2", True); await note("A.hot2", False); await ctrl.wait_for_timeout(300)
+    st = await ctrl.evaluate(PLAYER_STATUS)
+    check("hot cue 2 toggles mirror top-bottom on the player", st["decks"]["A"]["params"]["mirror"] == 2, st["decks"]["A"]["params"]["mirror"])
+    await note("A.fx", True); await ctrl.wait_for_timeout(300)
+    k1 = (await ctrl.evaluate(PLAYER_STATUS))["decks"]["A"]["params"]["kaleido"]
+    await note("A.fx", False); await ctrl.wait_for_timeout(300)
+    k2 = (await ctrl.evaluate(PLAYER_STATUS))["decks"]["A"]["params"]["kaleido"]
+    check("effect button is momentary: kaleido while held, back on release", k1 == 6 and k2 == 0, (k1, k2))
+    # zoom 1.0 sits at 20 % of the knob's travel: the knob has to cross it before it takes over
+    await note("A.scratch", True)
+    for v in (10, 20, 30, 64, 96): await send("A.treble", v)
+    await note("A.scratch", False); await ctrl.wait_for_timeout(300)
+    z = (await ctrl.evaluate(PLAYER_STATUS))["decks"]["A"]["params"]
+    check("holding scratch shifts the treble knob to zoom and leaves hue alone", z["zoom"] > 2.5 and z["hue"] == 0, (z["zoom"], z["hue"]))
+    await note("A.play", True); await note("A.play", False); await ctrl.wait_for_timeout(500)
+    check("play button pauses the running deck", (await ctrl.evaluate(PLAYER_STATUS))["decks"]["A"]["paused"] is True)
+    await ctrl.click(".tabs button[data-tab=destockd]"); await ctrl.wait_for_function("document.querySelectorAll('#results .card').length > 20")
+    for _ in range(3): await send("browse.turn", 1)
+    sel = await ctrl.evaluate("[...document.querySelectorAll('#results .card')].findIndex(c => c.classList.contains('selected'))")
+    check("browse encoder moves the library cursor", sel == 2, sel)
+
+SCENARIOS = {"smoke": smoke, "reload": reload, "crop": crop, "proxy": proxy, "youtube": youtube, "adapt": adapt, "stick": stick, "search": search, "unplug": unplug, "logging": logging, "mia": mia, "midi": midi}
 
 async def run(names, keep):
     from playwright.async_api import async_playwright
@@ -370,7 +440,7 @@ def main():
         # smoke/reload/crop run against plain static hosting (as on GitHub Pages: no proxy),
         # the proxy scenario against the full local server
         for flags, group in ((["--no-proxy"], [n for n in names if n not in ("proxy", "youtube", "adapt", "stick", "search", "unplug", "logging")]),
-                             (["--cache-gb", "1", "--unplug-flag", os.path.join(OUT, "unplugged.flag")], [n for n in names if n in ("proxy", "youtube", "stick", "search", "unplug", "logging")]),
+                             (["--cache-gb", "1", "--unplug-flag", os.path.join(OUT, "unplugged.flag")], [n for n in names if n in ("proxy", "youtube", "stick", "search", "unplug", "logging", "mia")]),
                              (["--cache-gb", "1", "--fake-speed", "youtube=1.2"], [n for n in names if n == "adapt"])):
             if not group or dog.fired: continue
             srv = subprocess.Popen([sys.executable, os.path.join(ROOT, "tools", "serve.py"), str(PORT), site, "--no-browser", *flags], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

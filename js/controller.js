@@ -1,8 +1,9 @@
 import { createBus } from './bus.js';
-import { loadCatalogs, destockdAll, destockdCollection, spelunkrAll, fmtBytes, fmtTime } from './catalog.js';
+import { loadCatalogs, destockdAll, destockdCollection, spelunkrAll, miaAll, miaCollection, miaFromApi, fmtBytes, fmtTime } from './catalog.js';
 import { supportsFolders, pickFolder, restoreFolder, requestAccess, scanFolder, scanServer, getFile, localThumb, saveCollections, COLLECTIONS_FILE } from './library.js';
 import { Stage, DEFAULT_PARAMS, DEFAULT_MASTER } from './stage.js';
 import { createLog } from './log.js';
+import { createMidi } from './midi.js';
 
 const log = createLog('controller');
 
@@ -264,6 +265,7 @@ function updateDeckStatus(name, s) {
   $('#master-hint').classList.toggle('hidden', anyGl || !anyClip);
   updateAvailability(name, s.mode, anyGl, anyClip);
   syncPreview(name, s);
+  if (name === 'B') midi.refreshLeds();
 }
 
 // Grey out what cannot act: WebGL-only effects on a CSS deck, the feedback group when no
@@ -459,6 +461,12 @@ function fillFilter() {
     for (const c of state.catalogs.destockd.collections) add('col:' + c.slug, `${c.name} (${c.clips.length})`);
     add('all', 'Every shot (39,001)');
     if (state.library && state.library.byUrl.size) add('local', `On stick (${state.library.byUrl.size})`);
+  } else if (state.tab === 'mia' && state.catalogs && state.catalogs.mia) {
+    const m = state.catalogs.mia;
+    add('collections', `All collections (${new Set(m.collections.flatMap((c) => c.clips)).size})`);
+    for (const c of m.collections) add('col:' + c.slug, `${c.name} (${c.clips.length})`);
+    add('all', `Every shot (${m.clips.length.toLocaleString()})`);
+    if (state.proxy && !state.serverLost) add('describe', 'Describe a shot (their search)');
   } else if (state.tab === 'spelunkr' && state.catalogs) {
     add('all', 'All channels');
     for (const c of state.catalogs.spelunkr.channels) add('ch:' + c.id, `${c.emoji} ${c.name} (${c.items.length})`);
@@ -497,6 +505,20 @@ function currentClips() {
       if (seen.has(c.key)) continue;
       if (!state.online && !localEntry(c)) continue;                 // offline: only what the stick has
       if (!terms.length || match((c.film + ' ' + c.shot).toLowerCase())) { seen.add(c.key); out.push(c); if (out.length >= 600) break; }
+    }
+  } else if (state.tab === 'mia' && cat && cat.mia) {
+    if (f === 'describe') { for (const c of state.miaResults) out.push(c); }
+    else {
+      let it;
+      if (f === 'all') it = miaAll(cat.mia);
+      else if (f && f.startsWith('col:')) it = miaCollection(cat.mia, f.slice(4));
+      else it = cat.mia.collections.flatMap((c) => miaCollection(cat.mia, c.slug));
+      const seen = new Set();
+      for (const c of it) {
+        if (seen.has(c.key)) continue;
+        if (!state.online && !localEntry(c)) continue;
+        if (!terms.length || match(`${c.film} ${c.year || ''}`.toLowerCase())) { seen.add(c.key); out.push(c); if (out.length >= 600) break; }
+      }
     }
   } else if (state.tab === 'spelunkr' && cat) {
     const chans = f && f.startsWith('ch:') ? cat.spelunkr.channels.filter((c) => c.id === f.slice(3)) : cat.spelunkr.channels;
@@ -578,6 +600,7 @@ function render() {
     results.innerHTML = `<div class="notice">${supportsFolders() ? 'Pick your clip folder with the button above. The browser remembers it.' : 'This browser cannot open folders. Use Chrome or Edge for the stick library; URL sources still work.'}</div>`;
     return;
   }
+  if (state.tab === 'mia' && filter.value === 'describe' && !clips.length) { results.innerHTML = `<div class="notice">${state.miaStatus || 'Describe a shot in the search box and press Enter: "a crowd cheering", "neon sign at night", "hands on a keyboard".'}</div>`; return; }
   if (state.tab === 'youtube' && !clips.length) { results.innerHTML = `<div class="notice">${!state.online ? 'Offline: YouTube is not reachable. Cached YouTube clips are in the Stick tab.' : state.proxy && state.proxy.youtube ? 'Type a search above and press Enter.' : 'YouTube needs the local server with yt-dlp (run from the stick).'}</div>`; return; }
   if (!clips.length) { results.innerHTML = `<div class="notice">${!state.online && (state.tab === 'destockd' || state.tab === 'spelunkr') ? 'Offline: showing only clips that are on the stick, and none match.' : 'Nothing matches.'}</div>`; return; }
   const frag = document.createDocumentFragment();
@@ -590,7 +613,8 @@ function card(c) {
   const local = localEntry(c);
   const sub = c.source === 'spelunkr'
     ? `${c.channelName}${c.year ? ' · ' + c.year : ''} · ${fmtTime(c.duration)}${c.bytes ? ' · ' + fmtBytes(c.bytes) : ''}`
-    : c.source === 'destockd' ? `${c.shot}${c.bytes ? ' · ' + fmtBytes(c.bytes) : ''}` : (c.sub || '');
+    : c.source === 'destockd' ? `${c.shot}${c.bytes ? ' · ' + fmtBytes(c.bytes) : ''}`
+    : c.source === 'mia' ? `${fmtTime(c.duration)} · ${c.colour ? 'colour' : 'b/w'}${c.aspect ? ' · ' + c.aspect : ''}${c.score ? ' · match ' + Math.round(c.score * 100) + '%' : ''}` : (c.sub || '');
   const starred = local && inOwn('Starred', local.path);
   el.innerHTML = `
     <img loading="lazy" src="${local ? '' : (c.thumb || '')}" alt="">
@@ -655,8 +679,26 @@ async function youtubeSearch(q) {
     render();
   } catch (e) { status.textContent = 'YouTube: ' + e.message; }
 }
+// Moving Image Archive: their search matches words against the picture content; through the local server
+async function miaSearch(q) {
+  if (!q) return;
+  state.miaStatus = 'searching the archive…'; state.miaResults = []; render();
+  try {
+    const r = await fetch(new URL('proxy/mia-search?q=' + encodeURIComponent(q), location.href));
+    const d = await r.json();
+    if (d.error) { state.miaStatus = d.error; render(); return; }
+    state.miaResults = (d.clips || []).map(miaFromApi);
+    state.miaStatus = state.miaResults.length ? '' : 'No matches.';
+    render();
+  } catch (e) { state.miaStatus = 'Search failed: ' + e.message; render(); }
+}
+state.miaResults = []; state.miaStatus = '';
 $('#yt-search').addEventListener('click', () => youtubeSearch(search.value.trim()));
-search.addEventListener('keydown', (e) => { if (e.key === 'Enter' && state.tab === 'youtube') youtubeSearch(search.value.trim()); });
+search.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  if (state.tab === 'youtube') youtubeSearch(search.value.trim());
+  if (state.tab === 'mia' && filter.value === 'describe') miaSearch(search.value.trim());
+});
 $('#skip-segments').addEventListener('change', (e) => { state.skipSegments = e.target.checked; persist(); });
 
 // ---------- clip folder ----------
@@ -785,6 +827,70 @@ $('#clear-cache').addEventListener('click', async () => {
   if (state.library) await useFolder(state.library.handle);
 });
 
+// ---------- MIDI ----------
+// The engine gets a small API over the controller's state; every change it makes goes
+// through the same setParam / setMaster / command paths as the on-screen controls, so the
+// inputs, the player and the previews all follow.
+let cursor = -1;                 // library cursor for the browse encoder
+function cards() { return $$('#results .card'); }
+function browse(delta) {
+  const all = cards(); if (!all.length) return;
+  cursor = Math.max(0, Math.min(all.length - 1, (cursor < 0 ? (delta > 0 ? -1 : 0) : cursor) + delta));
+  all.forEach((c, i) => c.classList.toggle('selected', i === cursor));
+  all[cursor].scrollIntoView({ block: 'nearest' });
+}
+function loadSelected(deck) {
+  const all = cards(); const el = all[cursor >= 0 ? cursor : 0]; if (!el) return;
+  el.querySelector('button[data-deck=' + (deck || $('#target-deck').value) + ']').click();
+}
+function paramRange(deck, key) {
+  const input = $(`[data-param=${key}]`, deckEls[deck]);
+  if (!input) return { min: 0, max: 1, step: 0.01 };
+  if (input.tagName === 'SELECT') return { steps: [...input.options].map((o) => (isNaN(Number(o.value)) ? o.value : Number(o.value))) };
+  if (input.type === 'checkbox') return { steps: [false, true] };
+  if (input.dataset.steps) return { steps: input.dataset.steps.split(',').map(Number) };
+  return { min: parseFloat(input.min), max: parseFloat(input.max), step: parseFloat(input.step) || 0 };
+}
+function masterRange(key) {
+  const input = $(`[data-master=${key}]`);
+  if (!input || input.type === 'checkbox') return { min: 0, max: 1, step: 1 };
+  if (input.tagName === 'SELECT') return { steps: [...input.options].map((o) => Number(o.value)) };
+  return { min: parseFloat(input.min), max: parseFloat(input.max), step: parseFloat(input.step) || 0 };
+}
+const midiDevices = [];          // device files loaded at boot (midi/*.json)
+const midi = createMidi({
+  devices: midiDevices,
+  getParam: (d, k) => state.decks[d].params[k],
+  setParam: (d, k, v) => { const input = $(`[data-param=${k}]`, deckEls[d]); if (input) setInput(input, v); setParam(d, k, v); },
+  paramRange, masterRange,
+  getMaster: (k) => state.master[k],
+  setMaster: (k, v) => { const input = $(`[data-master=${k}]`); if (input) setInput(input, v); setMaster(k, v); },
+  command: (cmd, d) => command(cmd === 'playpause' ? (state.decks[d].playing ? 'pause' : 'play') : cmd, d),
+  seek: (d, dt) => { const t = Math.max(0, (state.decks[d].lastTime || 0) + dt); bus.send('seek', { deck: d, time: t }); preview.seek(d, t); },
+  reset: (d) => $('.reset', deckEls[d]).click(),
+  isPlaying: (d) => !!state.decks[d].playing,
+  hasClip: (d) => !!state.decks[d].clip,
+  browse, loadSelected,
+  nextTab: () => { const t = tabs.filter((b) => !b.classList.contains('hidden')); const i = t.findIndex((b) => b.classList.contains('active')); setTab(t[(i + 1) % t.length].dataset.tab); },
+  pickup: null,
+});
+window.vjMidi = midi;            // for tests and the LED self-test
+const midiPill = $('#midi-status');
+midi.onChange((s) => {
+  const text = { connected: s.name, none: 'no midi device', unknown: 'unmapped midi: ' + (s.deviceNames || []).join(', '), denied: 'midi denied', unsupported: 'no web midi', off: 'midi' }[s.status] || s.status;
+  midiPill.textContent = text; midiPill.className = 'pill ' + (s.status === 'connected' ? 'on' : 'off');
+  midiPill.title = s.status === 'connected' ? `${s.name}: ${Object.keys(s.device.controls).length} controls mapped. Click for an LED sweep.` : 'Click to connect a MIDI controller';
+  if (s.status === 'connected') log.info('midi.connected', s.name); else if (s.status === 'denied') log.warn('midi.denied', s.error || '');
+});
+midiPill.addEventListener('click', async () => { if (midi.state.status === 'connected') { const n = await midi.sweep(); log.info('midi.sweep', `${n} LEDs`); } else midi.connect(); });
+async function initMidi() {
+  try {
+    const r = await fetch(new URL('midi/numark-mixtrack-pro.json', location.href), { cache: 'no-store' });
+    if (r.ok) midi.state.devicesLoaded = true, midiDevices.push(await r.json());
+  } catch { /* no device files */ }
+  if (navigator.requestMIDIAccess) midi.connect();
+}
+
 // ---------- boot ----------
 function debounce(fn, ms) { let t; return () => { clearTimeout(t); t = setTimeout(fn, ms); }; }
 function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
@@ -797,6 +903,7 @@ function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&am
   }
   setTab('destockd');
   await probeProxy();
+  initMidi();
 
   // Restore: prefer what a running player holds; otherwise our last saved state.
   const saved = loadPersisted();
