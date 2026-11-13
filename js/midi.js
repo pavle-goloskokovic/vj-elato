@@ -52,7 +52,7 @@ export function createMidi(api) {
     if (!id) return;
     const ctl = state.device.controls[id];
     let role = state.device.roles[id];
-    if (!role || role.do === 'none') return;
+    if (!role || role.do === 'none' || ctl.type === 'led') return;
     const deck = role.deck || (role.shift && role.shift.deck);
     if (role.shift && deck && state.shift[deck]) role = role.shift;
     if (ctl.type === 'button') onButton(id, role, pressed);
@@ -145,6 +145,8 @@ export function createMidi(api) {
       else if (role.led === 'param') { const cur = api.getParam(d, role.param); on = 'on' in role ? cur === role.on : !!cur; }
       else if (role.led === 'shift') on = !!state.shift[d];
       else if (role.led === 'held') on = state.held.has(id);
+      else if (role.led === 'speed') on = Math.abs((api.getParam(d, 'speed') || 1) - 1) > 0.02;      // the pitch LED: deck off normal speed
+      else if (role.led === 'target') on = api.targetDeck() === role.deck;                            // FOLDER = A, FILE = B
       led(id, on);
     }
   }

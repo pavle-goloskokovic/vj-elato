@@ -871,10 +871,12 @@ const midi = createMidi({
   isPlaying: (d) => !!state.decks[d].playing,
   hasClip: (d) => !!state.decks[d].clip,
   browse, loadSelected,
+  targetDeck: () => $('#target-deck').value,
   nextTab: () => { const t = tabs.filter((b) => !b.classList.contains('hidden')); const i = t.findIndex((b) => b.classList.contains('active')); setTab(t[(i + 1) % t.length].dataset.tab); },
   pickup: null,
 });
 window.vjMidi = midi;            // for tests and the LED self-test
+$('#target-deck').addEventListener('change', () => midi.refreshLeds());
 const midiPill = $('#midi-status');
 midi.onChange((s) => {
   const text = { connected: s.name, none: 'no midi device', unknown: 'unmapped midi: ' + (s.deviceNames || []).join(', '), denied: 'midi denied', unsupported: 'no web midi', off: 'midi' }[s.status] || s.status;

@@ -90,6 +90,7 @@ The controller speaks Web MIDI (Chrome, Edge). A device file in `midi/` describe
 | loop IN / OUT / RELOOP | hold for zoom 1.5 / 2.5, reset zoom and rotate |
 | cue gain, cue mix, headphone cue A / B | feedback, strobe rate, hold for blackout / strobe burst |
 | browse, LOAD A / B, BACK | library cursor, load, next tab |
+| pitch LEDs, FOLDER / FILE LEDs | deck off normal speed; load target A / B |
 
 Knobs and faders use soft takeover: after a reload or a shift change a control only takes over once it passes the on-screen value. Button LEDs show state (playing, loop, mirror, cover, bars, shift, held effects, loaded decks); clicking the midi pill runs an LED sweep. Roles are plain JSON: edit the file to change the layout. The master gain and mic controls of the Mixtrack Pro are analog and send nothing.
 

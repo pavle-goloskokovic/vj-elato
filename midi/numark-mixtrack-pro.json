@@ -14,7 +14,8 @@
   "Jog wheels, the browse knob and the six effect-row encoders send relative ticks: 1..3 clockwise, 127..125 counter-clockwise.",
   "MASTER GAIN, MIC GAIN and MIC THROUGH are analog only and send nothing. Cue gain and Cue mix do send.",
   "Holding SCRATCH on a deck is that deck's shift: the EQ knobs become zoom / rotate / crop, the jog scrubs, the hot cues are kaleidoscope presets.",
-  "Roles: do = param (absolute, soft takeover) | relative (ticks) | seek | cmd | toggle | momentary | step | set | reset | master | master-momentary | browse | load | nexttab | shift | none."
+  "Roles: do = param (absolute, soft takeover) | relative (ticks) | seek | cmd | toggle | momentary | step | set | reset | master | master-momentary | browse | load | nexttab | shift | none.",
+  "Four LEDs that are not buttons were found by lighting notes in batches: 112 and 113 beside the pitch faders, 115 FOLDER and 114 FILE beside the browse knob. They show a deck off normal speed and the current load target."
  ],
  "controls": {
   "xfader": {
@@ -463,6 +464,34 @@
    "type": "button",
    "msg": "note",
    "num": 77,
+   "ch": 1
+  },
+  "A.pitchled": {
+   "label": "Deck A pitch LED (beside the pitch fader)",
+   "type": "led",
+   "msg": "note",
+   "num": 112,
+   "ch": 1
+  },
+  "B.pitchled": {
+   "label": "Deck B pitch LED (beside the pitch fader)",
+   "type": "led",
+   "msg": "note",
+   "num": 113,
+   "ch": 1
+  },
+  "led.file": {
+   "label": "FILE LED (right of the browse knob)",
+   "type": "led",
+   "msg": "note",
+   "num": 114,
+   "ch": 1
+  },
+  "led.folder": {
+   "label": "FOLDER LED (left of the browse knob)",
+   "type": "led",
+   "msg": "note",
+   "num": 115,
    "ch": 1
   }
  },
@@ -930,6 +959,26 @@
   },
   "B.jogtouch": {
    "do": "none"
+  },
+  "A.pitchled": {
+   "do": "none",
+   "led": "speed",
+   "deck": "A"
+  },
+  "B.pitchled": {
+   "do": "none",
+   "led": "speed",
+   "deck": "B"
+  },
+  "led.folder": {
+   "do": "none",
+   "led": "target",
+   "deck": "A"
+  },
+  "led.file": {
+   "do": "none",
+   "led": "target",
+   "deck": "B"
   }
  }
 }
