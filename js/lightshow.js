@@ -20,21 +20,40 @@ export const ANIMATIONS = [
       const phase = ((u * 16 + v * 12 * 0.45 - t * 6) % 10 + 10) % 10;      // in pixels along the slide
       return phase < 5 ? 1 : 0;
     } },
-  { name: 'ripples', seconds: 14, fn: (u, v, t) => {
+  { name: 'ripples', seconds: 14, fn: (u, v, t, c) => {
       // A ring growing out of one jog wheel, then the other. The disc is the block of pixels under
       // the jog (columns 10-15 rows 5-8 plus columns 11-14 rows 4 and 9; mirrored for the left
       // deck). A pixel is lit when its distance to the nearest disc pixel, with horizontal
-      // distances scaled by 1.2, is in [r, r + 2): a ring two pixels thick. At r = 1 it hugs the disc
-      // (the hand-drawn first frame, one pixel thicker); then r moves outward across the panel.
-      const period = 2.4, k = Math.floor(t / period), left = k % 2 === 0;
-      const x = Math.floor(u * 16), y = Math.floor(v * 12);
-      let best = 99;
-      for (let hy = 4; hy <= 9; hy++) for (let hx = 10; hx <= 15; hx++) {
-        if ((hy === 4 || hy === 9) && (hx === 10 || hx === 15)) continue;
-        const dx = (x - (left ? 15 - hx : hx)) * 1.2, dy = y - hy; const d = Math.sqrt(dx * dx + dy * dy); if (d < best) best = d;
+      // distances scaled by 1.2, is in [r, r + 2): a ring two pixels thick. r runs from 0 (a
+      // one-pixel ring hugging the disc) outward across the panel; radii at which no light would
+      // be lit are skipped, so there are no empty frames.
+      const dist = (x, y, left) => {
+        let best = 99;
+        for (let hy = 4; hy <= 9; hy++) for (let hx = 10; hx <= 15; hx++) {
+          if ((hy === 4 || hy === 9) && (hx === 10 || hx === 15)) continue;
+          const dx = (x - (left ? 15 - hx : hx)) * 1.2, dy = y - hy; const d = Math.sqrt(dx * dx + dy * dy); if (d < best) best = d;
+        }
+        return best;
+      };
+      const ring = (d, r) => d > 0 && d >= r && d < r + 2;
+      if (!c.rippleTable) {
+        const N = 150, RMAX = 15, table = {};
+        for (const left of [true, false]) {
+          const ld = c.lights.map((l) => dist(Math.floor(l.u * 16), Math.floor(l.v * 12), left));
+          const w = []; let total = 0;
+          for (let k = 0; k < N; k++) { const r = k * RMAX / N; total += ld.some((d) => ring(d, r)) ? 1 : 0; w.push(total); }
+          table[left ? 'L' : 'R'] = { w, total, N, RMAX };
+        }
+        c.rippleTable = table;
       }
-      const r = ((t % period) / period) * 15;                                 // starts at 0: a one-pixel ring hugging the disc, then widens to two
-      return best > 0 && best >= r && best < r + 2 ? 1 : 0;
+      const period = 2.4, GAP = 0.2, k = Math.floor(t / period), left = k % 2 === 0, tt = t % period;
+      if (tt >= period - GAP) return 0;                       // a dark pause of 0.2 s (three frames) between rings
+      if (c.rippleT !== t) {
+        const { w, total, N, RMAX } = c.rippleTable[left ? 'L' : 'R'], ph = (tt / (period - GAP)) * total;
+        let n = 0; while (n < N - 1 && w[n] <= ph) n++;
+        c.rippleR = n * RMAX / N; c.rippleT = t;
+      }
+      return ring(dist(Math.floor(u * 16), Math.floor(v * 12), left), c.rippleR) ? 1 : 0;
     } },
   { name: 'radar', seconds: 12, fn: (u, v, t) => {
       // a cone sweeping around each jog wheel, left one clockwise, right one counter-clockwise,
@@ -51,9 +70,14 @@ export const ANIMATIONS = [
       return d > 0 && d < 0.22 ? smooth(1 - d / 0.22) : 0;
     } },
   { name: 'bounce', seconds: 12, fn: (u, v, t) => {
-      // a ball 5 pixels across bouncing around the panel
-      const R = 2.5, tri = (x) => { const m = x % 2; return m < 1 ? m : 2 - m; };
-      const bx = R + (16 - 2 * R) * tri(t * 0.55), by = R + (12 - 2 * R) * tri(t * 0.8 + 0.3);
+      // a ball 5 pixels across bouncing around the panel at constant speed, its centre reaching
+      // half a pixel from the edges so it rolls over the outer rows. The path (9 horizontal and
+      // 6 vertical half-bounces per 32 s loop, with these phases) was picked by searching all such
+      // paths for one that visits every light, spends the most time over the red and green
+      // transport buttons, and has the fewest dark frames.
+      const R = 2.5, M = 0.5, LOOP = 32, tri = (x) => { const m = x % 2; return m < 1 ? m : 2 - m; };
+      const s = t % LOOP;
+      const bx = M + (16 - 2 * M) * tri(s * 18 / LOOP), by = M + (12 - 2 * M) * tri(s * 12 / LOOP + 0.25);
       return Math.hypot(u * 16 - bx, v * 12 - by) < R ? 1 : 0;
     } },
   { name: 'breathe', seconds: 10, fn: (u, v, t) => {
