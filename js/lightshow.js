@@ -15,23 +15,34 @@ const clamp01 = (x) => Math.max(0, Math.min(1, x));
 // Each animation: { name, seconds, fn(u, v, t, ctx) -> 0..1 }. ctx has aspect (width/height),
 // so distances and angles come out right on the panel, and the light list for chases.
 export const ANIMATIONS = [
-  { name: 'wave', seconds: 12, fn: (u, v, t) => clamp01(0.5 + 0.6 * Math.sin(u * TAU * 1.2 - t * 2.2 + Math.sin(t * 0.7) * v * 2)) },
-  { name: 'ripples', seconds: 14, fn: (u, v, t, c) => {
-      // rings expanding from one jog wheel, then the other, then the middle
-      const phase = Math.floor(t / 4.5) % 3, cx = [0.21, 0.79, 0.5][phase], cy = 0.55;
-      const d = Math.hypot((u - cx) * c.aspect, v - cy);
-      return clamp01(0.5 + 0.7 * Math.cos(d * 22 - t * 5)) * (d < 1.1 ? 1 : 0);
+  { name: 'wave', seconds: 12, fn: (u, v, t) => {
+      // diagonal lines sliding left to right: five pixels wide, ten apart
+      const phase = ((u * 16 + v * 12 * 0.45 - t * 6) % 10 + 10) % 10;      // in pixels along the slide
+      return phase < 5 ? 1 : 0;
     } },
-  { name: 'radar', seconds: 12, fn: (u, v, t, c) => {
-      // a sweep around each jog wheel, counter-rotating, with a fading trail; each arm stays
-      // within its own deck so the two never paint across the panel
-      const arm = (cx, dir) => {
-        const dx = (u - cx) * c.aspect, dy = v - 0.55, r = Math.hypot(dx, dy);
-        if (r > 0.62) return 0;
-        const a = Math.atan2(dy, dx); const d = ((a - dir * t * 1.6) % TAU + TAU) % TAU;
-        return Math.exp(-d * 1.8);
-      };
-      return clamp01(Math.max(arm(0.21, 1), arm(0.79, -1)));
+  { name: 'ripples', seconds: 14, fn: (u, v, t) => {
+      // A ring growing out of one jog wheel, then the other. The disc is the block of pixels under
+      // the jog (columns 10-15 rows 5-8 plus columns 11-14 rows 4 and 9; mirrored for the left
+      // deck). A pixel is lit when its distance to the nearest disc pixel, with horizontal
+      // distances scaled by 1.2, is in [r, r + 2): a ring two pixels thick. At r = 1 it hugs the disc
+      // (the hand-drawn first frame, one pixel thicker); then r moves outward across the panel.
+      const period = 2.4, k = Math.floor(t / period), left = k % 2 === 0;
+      const x = Math.floor(u * 16), y = Math.floor(v * 12);
+      let best = 99;
+      for (let hy = 4; hy <= 9; hy++) for (let hx = 10; hx <= 15; hx++) {
+        if ((hy === 4 || hy === 9) && (hx === 10 || hx === 15)) continue;
+        const dx = (x - (left ? 15 - hx : hx)) * 1.2, dy = y - hy; const d = Math.sqrt(dx * dx + dy * dy); if (d < best) best = d;
+      }
+      const r = ((t % period) / period) * 15;                                 // starts at 0: a one-pixel ring hugging the disc, then widens to two
+      return best > 0 && best >= r && best < r + 2 ? 1 : 0;
+    } },
+  { name: 'radar', seconds: 12, fn: (u, v, t) => {
+      // a cone sweeping around each jog wheel, left one clockwise, right one counter-clockwise,
+      // each staying on its own half of the panel. Cone: 80 degrees wide, one turn every 2.7 s.
+      const x = u * 16, y = v * 12, left = x < 8;
+      const cx = left ? 3 : 13, cy = 7, dir = left ? 1 : -1;
+      const a = Math.atan2(y - cy, x - cx), d = ((a - dir * t * 2.3) % TAU + TAU) % TAU;
+      return Math.min(d, TAU - d) < 0.7 ? 1 : 0;
     } },
   { name: 'rain', seconds: 12, fn: (u, v, t) => {
       const col = Math.floor(u * 14), speed = 0.35 + hash(col, 1) * 0.5, off = hash(col, 2) * 3;
@@ -39,14 +50,14 @@ export const ANIMATIONS = [
       const d = p - v;
       return d > 0 && d < 0.22 ? smooth(1 - d / 0.22) : 0;
     } },
-  { name: 'bounce', seconds: 12, fn: (u, v, t, c) => {
-      const tri = (x, p) => { const m = (x % (2 * p)); return m < p ? m / p : 2 - m / p; };
-      const bx = 0.06 + 0.88 * tri(t * 0.37, 1), by = 0.08 + 0.84 * tri(t * 0.53 + 0.3, 1);
-      const d = Math.hypot((u - bx) * c.aspect, v - by);
-      return clamp01(1.1 - d / 0.16);
+  { name: 'bounce', seconds: 12, fn: (u, v, t) => {
+      // a ball 5 pixels across bouncing around the panel
+      const R = 2.5, tri = (x) => { const m = x % 2; return m < 1 ? m : 2 - m; };
+      const bx = R + (16 - 2 * R) * tri(t * 0.55), by = R + (12 - 2 * R) * tri(t * 0.8 + 0.3);
+      return Math.hypot(u * 16 - bx, v * 12 - by) < R ? 1 : 0;
     } },
   { name: 'breathe', seconds: 10, fn: (u, v, t) => {
-      const p = 0.5 + 0.5 * Math.sin(t * 1.3);                // the whole panel breathes, each light slightly out of phase
+      const p = 0.5 + 0.5 * Math.sin(t * 1.8);                // the whole panel breathes, each light slightly out of phase
       const j = hash(Math.floor(u * 40), Math.floor(v * 30)) * 0.35;
       return clamp01(p - j + 0.2);
     } },
@@ -64,6 +75,51 @@ export const ANIMATIONS = [
       const cell = hash(Math.floor(u * 50), Math.floor(v * 40));
       const ph = (t * (0.6 + cell * 1.2) + cell * 7) % 1;
       return ph < 0.18 ? 1 : 0;
+    } },
+  { name: 'xmas', seconds: 12, fn: (u, v, t) => {
+      // christmas lights: the pixels are strung in three groups along the diagonals, and the groups
+      // light in turn, with a twinkle now and then
+      const x = Math.floor(u * 16), y = Math.floor(v * 12), step = Math.floor(t * 2.5);
+      const group = (x + 2 * y) % 3;
+      if (group === step % 3) return 1;
+      return hash(x * 7 + y, step) < 0.06 ? 1 : 0;
+    } },
+  { name: 'stick', seconds: 14, fn: (u, v, t) => {
+      // a stick through the centre of one jog turns half a circle, stalls, then a stick on the other
+      // jog turns half a circle the other way, stalls, and so on
+      const turn = 1.3, stall = 0.4, period = 2 * (turn + stall), tt = t % period;
+      const left = tt < turn + stall, p = Math.min(1, (left ? tt : tt - turn - stall) / turn);
+      const ang = left ? p * Math.PI : -p * Math.PI;                         // starts and stalls horizontal
+      const x = u * 16, y = v * 12;
+      const cx = left ? 3 : 13, cy = 5.5, dx = x - cx, dy = y - cy;      // pivot on the cue row: the horizontal stick is rows 4-6, centred on the cue and browse lights
+      const along = dx * Math.cos(ang) + dy * Math.sin(ang), across = -dx * Math.sin(ang) + dy * Math.cos(ang);
+      return Math.abs(across) < 1.5 ? 1 : 0;                                 // three pixels wide, spans the whole display
+    } },
+  { name: 'propeller', seconds: 12, fn: (u, v, t, c) => {
+      // a propeller turning around the centre of the panel: blades narrow at the hub (under one
+      // pixel, so the four centre lights only blink as a blade passes) and three pixels wide at
+      // the tips. Angles at which no light would be lit (near vertical) are hurried through, so
+      // there are no empty frames; the rest turns at one revolution every 3 s.
+      const blade = (ang, x, y) => {
+        const dx = x - 8, dy = y - 5.5;
+        const along = dx * Math.cos(ang) + dy * Math.sin(ang), across = -dx * Math.sin(ang) + dy * Math.cos(ang);
+        return Math.abs(across) < 0.25 + 1.35 * Math.min(1, Math.abs(along) / 8);
+      };
+      if (!c.propTable) {
+        const w = [], N = 360; let total = 0;
+        for (let k = 0; k < N; k++) {
+          const ang = k * Math.PI / N;                       // the blade has two-fold symmetry: half a turn is enough
+          const lit = c.lights.some((l) => blade(ang, l.u * 16, l.v * 12));
+          total += lit ? 1 : 0.08; w.push(total);
+        }
+        c.propTable = { w, total, N };
+      }
+      if (c.propT !== t) {
+        const { w, total, N } = c.propTable, ph = ((t * 2.1 / Math.PI) % 1 + 1) % 1 * total;
+        let k = 0; while (k < N - 1 && w[k] < ph) k++;
+        c.propAng = k * Math.PI / N; c.propT = t;
+      }
+      return blade(c.propAng, u * 16, v * 12) ? 1 : 0;
     } },
   { name: 'curtain', seconds: 10, fn: (u, v, t) => {
       // halves close and open, then quarters
@@ -124,7 +180,7 @@ export function createLightShow(layout, opts = {}) {
     const g = canvas.getContext('2d'); const W = canvas.width, H = canvas.height;
     const r = result || frame(now);
     g.fillStyle = '#0b0b0e'; g.fillRect(0, 0, W, H);
-    const cols = 48, rows = Math.round(48 / aspect);
+    const cols = layout.cols || 48, rows = layout.rows || Math.round(cols / aspect);
     for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
       const b = r.fn((x + 0.5) / cols, (y + 0.5) / rows, r.t, ctx);
       if (b <= 0.05) continue;
