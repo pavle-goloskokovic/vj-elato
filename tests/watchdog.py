@@ -10,7 +10,7 @@ recognised by its temporary profile folder in the command line.
     with Watchdog(deadline_s=1500, max_mb=1500):
         ...
 """
-import subprocess, sys, threading, time
+import os, subprocess, sys, threading, time
 
 PS = ["powershell", "-NoProfile", "-NonInteractive", "-Command"]
 MARK = "playwright"          # part of the profile path Playwright gives its browsers
@@ -19,15 +19,31 @@ def _ps(cmd):
     try: return subprocess.run(PS + [cmd], capture_output=True, text=True, timeout=25).stdout
     except Exception: return ""
 
+def _descendants(root):
+    """PIDs of every process below `root` in the process tree."""
+    out = _ps("Get-CimInstance Win32_Process | ForEach-Object { '{0} {1}' -f $_.ProcessId, $_.ParentProcessId }")
+    kids = {}
+    for line in out.splitlines():
+        a = line.split()
+        if len(a) == 2 and a[0].isdigit() and a[1].isdigit(): kids.setdefault(int(a[1]), []).append(int(a[0]))
+    seen, todo = set(), [root]
+    while todo:
+        for k in kids.get(todo.pop(), []):
+            if k not in seen: seen.add(k); todo.append(k)
+    return seen
+
 def browser_processes():
-    """[(pid, private MB, kind)] of Playwright-launched Chrome processes. Private bytes, not the
-    working set: the working set counts shared DLL pages once per process and overstates a
-    multi-process browser by hundreds of MB."""
+    """[(pid, private MB, kind)] of the Chrome processes THIS script launched: Playwright browsers
+    that are descendants of this Python process. Browsers started by anything else (another
+    session, another tool, the user) also carry "playwright" in their command line and must never
+    be touched. Private bytes, not the working set: the working set counts shared DLL pages once
+    per process and overstates a multi-process browser by hundreds of MB."""
+    mine = _descendants(os.getpid())
     out = _ps(f"Get-CimInstance Win32_Process -Filter \"Name='chrome.exe' or Name='chrome-headless-shell.exe'\" | Where-Object {{ $_.CommandLine -like '*{MARK}*' }} | ForEach-Object {{ $k = if ($_.CommandLine -match '--type=([a-z-]+)') {{ $Matches[1] }} else {{ 'browser' }}; '{{0}} {{1}} {{2}}' -f $_.ProcessId, $_.PrivatePageCount, $k }}")
     procs = []
     for line in out.splitlines():
         parts = line.split()
-        if len(parts) == 3 and parts[0].isdigit(): procs.append((int(parts[0]), int(parts[1]) / 1e6, parts[2]))
+        if len(parts) == 3 and parts[0].isdigit() and int(parts[0]) in mine: procs.append((int(parts[0]), int(parts[1]) / 1e6, parts[2]))
     return procs
 
 def describe(procs):
