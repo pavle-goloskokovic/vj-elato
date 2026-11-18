@@ -89,6 +89,22 @@
           <label>fb rotate <input type="range" data-master="fbRotate" min="-10" max="10" step="0.1" value="0"><output></output></label>
           <label>fb hue <input type="range" data-master="fbHue" min="0" max="30" step="0.5" value="0"><output></output></label>
           <label>strobe <input type="range" data-master="strobe" min="0" max="20" step="0.5" value="0"><output></output></label>
+          <label title="Feedback luma key: where the picture is darker than this level the trail covers it, so a bright subject stays solid in front of a tunnel of its own copies">fb key <input type="range" data-master="fbKey" min="0" max="1" step="0.01" value="0"><output></output></label>
+          <label title="Feedback vanishing point, left / right: where the trail zooms and turns around">fb x <input type="range" data-master="fbX" min="-0.5" max="0.5" step="0.01" value="0"><output></output></label>
+          <label title="Feedback vanishing point, down / up">fb y <input type="range" data-master="fbY" min="-0.5" max="0.5" step="0.01" value="0"><output></output></label>
+          <label title="Feedback camera turned sideways: one side of the trail recedes">fb tilt <input type="range" data-master="fbTilt" min="-0.5" max="0.5" step="0.01" value="0"><output></output></label>
+          <label title="Softening inside the feedback loop: every pass blurs the trail a little more">fb blur <input type="range" data-master="fbBlur" min="0" max="1" step="0.01" value="0"><output></output></label>
+          <label title="Worn VHS tape: smeared colour, soft picture, tape noise, jitter, dropouts and the head-switching lines at the bottom">vhs <input type="range" data-master="vhs" min="0" max="1" step="0.01" value="0"><output></output></label>
+          <label title="VHS mistracking: a band of noise that drifts up the picture">vhs track <input type="range" data-master="vhsTrack" min="0" max="1" step="0.01" value="0"><output></output></label>
+          <label title="TV set: antenna signal level. Lower it for snow, then lost colour, then broken sync">tv signal <input type="range" data-master="tvSignal" min="0" max="1" step="0.01" value="1"><output></output></label>
+          <label title="TV set: vertical hold. Off centre the picture shifts, further out it rolls">tv v-hold <input type="range" data-master="tvVHold" min="-1" max="1" step="0.01" value="0"><output></output></label>
+          <label title="TV set: horizontal hold. Off centre the picture slides sideways, further out it tears into diagonal bands and the colour goes">tv h-hold <input type="range" data-master="tvHHold" min="-1" max="1" step="0.01" value="0"><output></output></label>
+          <label title="TV set: a reflected copy of the signal arriving late; negative inverts it">tv ghost <input type="range" data-master="tvGhost" min="-1" max="1" step="0.01" value="0"><output></output></label>
+          <label title="TV set: how late the ghost arrives, in microseconds (1 is about 2 % of the picture width)">tv delay <input type="range" data-master="tvDelay" min="0.2" max="12" step="0.1" value="2"><output></output></label>
+          <label title="TV set: mains hum, light and dark bars drifting up the picture and bending it">tv hum <input type="range" data-master="tvHum" min="0" max="1" step="0.01" value="0"><output></output></label>
+          <label title="TV set: raises the tube's black level, so the blanking bar and sync pulses show when the picture rolls or tears">tv bright <input type="range" data-master="tvBright" min="0" max="1" step="0.01" value="0"><output></output></label>
+          <label title="Picture tube: 240 scanlines, phosphor stripes and a vignette on the projector output">crt <input type="range" data-master="crt" min="0" max="1" step="0.01" value="0"><output></output></label>
+          <label title="Picture tube: bulge of the glass; the corners pull in and go black">crt curve <input type="range" data-master="crtCurve" min="0" max="1" step="0.01" value="0"><output></output></label>
           <label>render <select data-master="scale"><option value="0.5">50%</option><option value="0.75" selected>75%</option><option value="1">100%</option></select></label>
           <button class="reset" id="master-reset">reset master fx</button>
         </div>
@@ -107,7 +123,7 @@
         <canvas id="show-canvas" width="600" height="450"></canvas>
         <div class="params">
           <span class="muted" style="grid-column:1/-1">The controller's lights as a sparse display: each animation is drawn over the whole panel, the dots are the real LEDs. Pick one to audition it, or leave auto to cycle.</span>
-          <span id="master-hint" class="hint hidden">feedback needs a deck on WebGL: load a clip from the stick. Streams only get the strobe.</span>
+          <span id="master-hint" class="hint hidden">feedback, VHS, TV and CRT need a deck on WebGL: load a clip from the stick. Streams only get the strobe.</span>
         </div>
       </div>
     </section>

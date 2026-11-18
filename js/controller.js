@@ -269,17 +269,18 @@ function updateDeckStatus(name, s) {
   if (name === 'B') midi.refreshLeds();
 }
 
-// Grey out what cannot act: WebGL-only effects on a CSS deck, the feedback group when no
+// Grey out what cannot act: WebGL-only effects on a CSS deck, feedback and the TV set when no
 // deck is on WebGL, and the transport of an empty deck. Parameters of an empty deck stay
 // live so a deck can be preset before a clip is loaded. Everything the CSS path has
 // (blur included) also exists in the shader, so nothing is disabled on a WebGL deck.
 const GL_ONLY = new Set(['pixelate', 'rgbShift', 'posterize', 'threshold', 'mirror', 'kaleido']);
-const FEEDBACK = new Set(['feedback', 'fbZoom', 'fbRotate', 'fbHue']);
+const GL_MASTER = new Set(['feedback', 'fbZoom', 'fbRotate', 'fbHue', 'fbKey', 'fbX', 'fbY', 'fbTilt', 'fbBlur', 'vhs', 'vhsTrack', 'crt', 'crtCurve', 'tvSignal', 'tvVHold', 'tvHHold', 'tvGhost', 'tvDelay', 'tvHum', 'tvBright']);
 function setAvailable(input, on, why) {
   input.disabled = !on;
   const label = input.closest('label') || input;
   label.classList.toggle('off', !on);
-  label.title = on ? '' : why;
+  if (label.dataset.tip === undefined) label.dataset.tip = label.title;     // the control's own tooltip comes back with it
+  label.title = on ? label.dataset.tip : why;
 }
 function updateAvailability(name, mode, anyGl, anyClip) {
   const el = deckEls[name], loaded = !!state.decks[name].clip;
@@ -288,7 +289,7 @@ function updateAvailability(name, mode, anyGl, anyClip) {
     if (GL_ONLY.has(k)) setAvailable(input, !loaded || mode === 'gl', 'Needs WebGL: this deck plays a stream the browser cannot read. Use a stick clip or the local server.');
   }
   for (const b of $$('[data-cmd], .scrub', el)) b.disabled = !loaded;
-  for (const input of $$('[data-master]')) if (FEEDBACK.has(input.dataset.master)) setAvailable(input, !anyClip || anyGl, 'Feedback needs a deck on WebGL.');
+  for (const input of $$('[data-master]')) if (GL_MASTER.has(input.dataset.master)) setAvailable(input, !anyClip || anyGl, 'Feedback, VHS, TV and CRT need a deck on WebGL.');
 }
 
 // Keep the preview in step with the player: nudge it when it drifts, but only

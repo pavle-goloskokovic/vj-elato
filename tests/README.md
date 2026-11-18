@@ -15,7 +15,9 @@ Scenarios:
 
 - **smoke** – cards render without overlapping, the tabs find each other, a local clip
   plays on WebGL, a Destockd stream falls back to the CSS layer, deck and master effects
-  change the picture, strobe blinks, the crossfader is linear, reset fx resets.
+  change the picture, the TV set slides, rolls and breaks up a paused picture, the VHS
+  tape, the CRT tube and the feedback blur, vanishing point and key each change it, and a
+  reset leaves it untouched, strobe blinks, the crossfader is linear, reset fx resets.
 - **reload** – reloading the controller restores clips and settings, leaves the player
   playing and resumes the previews in sync; reloading the player resumes where it was.
 - **crop** – the 4:3 bars button trims the pillarbox so cover differs from contain.

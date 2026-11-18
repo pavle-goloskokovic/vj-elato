@@ -15,6 +15,7 @@
 // bad link never turns the projector black.
 
 import { createRenderer, crossfadeWeights } from './gl.js';
+import { TV_DEFAULTS } from './tv.js';
 
 export const DEFAULT_PARAMS = {
   opacity: 1, speed: 1, loop: true, fit: 'contain', blend: 'normal',
@@ -25,6 +26,10 @@ export const DEFAULT_PARAMS = {
 };
 export const DEFAULT_MASTER = {
   crossfade: 0, blackout: false, feedback: 0, fbZoom: 1, fbRotate: 0, fbHue: 0, strobe: 0, scale: 0.75,
+  fbKey: 0, fbX: 0, fbY: 0, fbTilt: 0, fbBlur: 0,     // feedback: luma key, vanishing point, camera tilt, blur in the loop
+  vhs: 0, vhsTrack: 0,                                // worn tape and its mistracking band
+  crt: 0, crtCurve: 0,                                // picture tube: scanlines and mask, bulge
+  ...TV_DEFAULTS,      // the TV set: tvSignal, tvVHold, tvHHold, tvGhost, tvDelay, tvHum, tvBright
 };
 
 // Hosts known to send CORS headers on their video files. archive.org is NOT
