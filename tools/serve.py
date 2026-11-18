@@ -53,7 +53,10 @@ PORT = int(ARGS[0]) if ARGS else 8765
 OPEN = "--no-browser" not in sys.argv
 # The stick: given with --stick when the launcher staged the tool to the laptop, otherwise the
 # parent of the vj-elato folder we run from. It may vanish and come back; see stick_present().
-STICK = os.path.abspath(opt("--stick", "")) if opt("--stick", "") else (os.path.dirname(ROOT) if os.path.basename(ROOT).lower() == "vj-elato" else ROOT)
+# Run from a git checkout (development) there is no stick: everything stays inside the checkout,
+# so the cache and the logs do not land in the folder above the repo.
+CHECKOUT = not opt("--stick", "") and os.path.isdir(os.path.join(ROOT, ".git"))
+STICK = os.path.abspath(opt("--stick", "")) if opt("--stick", "") else (ROOT if CHECKOUT else os.path.dirname(ROOT) if os.path.basename(ROOT).lower() == "vj-elato" else ROOT)
 UNPLUG_FLAG = opt("--unplug-flag", "")          # tests: while this file exists the stick counts as absent
 
 _stick_state = {"present": None}
@@ -504,6 +507,7 @@ class SessionLog:
         self.name = time.strftime("session-%Y%m%d-%H%M%S.jsonl")
         self.lock = threading.Lock()
         self.dirs = {"laptop": os.path.join(ROOT, "logs"), "stick": os.path.join(STICK, "vj-elato-logs")}
+        if CHECKOUT: del self.dirs["stick"]          # same folder as the laptop copy: one file is enough
         self.capped = set()
         for where, d in self.dirs.items(): self.prune(where, d)
         self.write({"ts": int(time.time() * 1000), "src": "server", "level": "info", "type": "session.start",
@@ -531,7 +535,7 @@ class SessionLog:
                 except OSError:
                     pass
     def current(self, where="laptop"):
-        return os.path.join(self.dirs[where], self.name)
+        return os.path.join(self.dirs.get(where, self.dirs["laptop"]), self.name)
 
 slog = None
 def logev(level, type_, message, **details):
@@ -711,7 +715,7 @@ if __name__ == "__main__":
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
     srv.daemon_threads = True
     slog = SessionLog()
-    print(f"  log: {slog.current()}" + (f"  and {slog.current('stick')}" if stick_present() else ""))
+    print(f"  log: {slog.current()}" + (f"  and {slog.current('stick')}" if stick_present() and not CHECKOUT else ""))
     url = f"http://localhost:{PORT}/"
     print(f"VJ Elato: serving {ROOT}\n  {url}   (Ctrl+C to stop)")
     print(f"  stick: {STICK}" + ("" if stick_present() else "  (not present right now)"))
