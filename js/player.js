@@ -13,6 +13,7 @@ const overlayMsg = document.getElementById('overlay-msg');
 const stage = new Stage({
   videos: { A: document.getElementById('deckA'), B: document.getElementById('deckB') },
   canvas,
+  overlay: { host: document.getElementById('stage'), before: black },
   onEvent: (e) => {
     if (e.type === 'loadfail') log.error('deck.loadfail', `deck ${e.deck}: ${e.why}`, { title: e.meta && e.meta.title, url: e.meta && e.meta.url });
     else if (e.type === 'error') log.error('deck.error', `deck ${e.deck}: ${e.why}`);
@@ -54,7 +55,9 @@ bus.on('restart', (m) => stage.restart(m.deck));
 bus.on('seek', (m) => stage.seek(m.deck, m.time));
 bus.on('deck', (m) => stage.setParams(m.deck, m.params));
 bus.on('master', (m) => { stage.setMaster(m.params); applyBlackout(); });
+bus.on('overlay', (m) => { log.info('overlay', m.source ? `overlay <- ${m.source.name}` : 'overlay cleared'); stage.setOverlay(m.source); });
 bus.on('sync', (m) => {
+  if ('overlay' in m) stage.setOverlay(m.overlay);
   for (const name of ['A', 'B']) {
     const s = m.decks[name];
     if (!s) continue;

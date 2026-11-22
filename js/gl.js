@@ -15,6 +15,7 @@
 // stage keeps such a deck as a plain <video> layer with CSS filters instead.
 
 import { createTv, TIMING } from './tv.js';
+import { GEN_BY_ID, genShader } from './generators.js';
 
 const VERT = `#version 300 es
 precision highp float;
@@ -35,6 +36,63 @@ uniform float pixelate, rgbShift, posterize, threshold;
 uniform vec2 crop;          // fraction trimmed from each side (x) and top/bottom (y): 0.125 removes 4:3 pillarbox bars
 uniform float blur;         // radius in output pixels; a 12-tap disc, cheap and good enough for a VJ blur
 uniform int mirror, kaleido;
+uniform float halftone, dither, ledWall;   // screen grids: each sets its cell size; they layer, the picture read at the coarsest
+uniform float ripple, spiral, glitch, time;
+uniform int palette;        // brightness mapped onto colours: 1 duotone, 2 thermal, 3 cyanotype, 4 phosphor; hue turns them
+uniform int edges;          // 1 white outlines on black, 2 outlines over the picture, 3 neon
+uniform float ascii;        // a fourth screen grid: characters, denser where the picture is brighter
+uniform float riso;         // three spot inks on paper, this far out of register
+uniform float warp, stretchGrid, interference, grain, fisheye;
+uniform float radialBlur;   // above zero streaks out from the middle, below zero spins around it
+uniform float stretch;      // above zero the column at this distance from the right edge is pulled out to the edge, below zero a row to the bottom
+uniform float lumalines;    // rows of lines pushed up by brightness
+uniform float scanMod;      // scan lines that swell with brightness
+
+// 5x5 glyphs, sparse to dense: space . : - + = o % @ #  (bit = row * 5 + column, row 0 on top)
+const int GLYPHS[10] = int[](0, 4194304, 131200, 14336, 145536, 459200, 15255086, 27070835, 15398446, 11512810);
+
+const float BAYER[16] = float[](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+float hash(vec2 p) {        // Dave Hoskins' hash without sine: no banding on pixel coordinates
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+vec2 noise2(vec2 p) {       // smooth value noise, two channels
+  vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  vec2 a = vec2(hash(i), hash(i + 31.7)), b = vec2(hash(i + vec2(1.0, 0.0)), hash(i + vec2(1.0, 0.0) + 31.7));
+  vec2 c = vec2(hash(i + vec2(0.0, 1.0)), hash(i + vec2(0.0, 1.0) + 31.7)), e = vec2(hash(i + 1.0), hash(i + 1.0 + 31.7));
+  return mix(mix(a, b, f.x), mix(c, e, f.x), f.y);
+}
+// where grid line k of n sits on screen: evenly spaced, pushed about by amt, gliding to a new place every second
+float cutAt(float k, float n, float row, float amt) {
+  if (k <= 0.0) return 0.0;
+  if (k >= n) return 1.0;
+  float tick = floor(time), f = smoothstep(0.0, 0.35, fract(time));
+  float j = mix(hash(vec2(k + row * 17.0, tick)), hash(vec2(k + row * 17.0, tick + 1.0)), f);
+  return (k + (j - 0.5) * 0.9 * amt) / n;
+}
+// screen position -> picture position along one axis of the stretchy grid
+float unstretch(float x, float row, float amt) {
+  const float N = 5.0;
+  for (float k = 0.0; k < N; k++) {
+    float a = cutAt(k, N, row, amt), b = cutAt(k + 1.0, N, row, amt);
+    if (x < b || k == N - 1.0) return (k + clamp((x - a) / max(b - a, 1e-4), 0.0, 1.0)) / N;
+  }
+  return x;
+}
+vec3 paletteMap(float l) {
+  l = clamp(l, 0.0, 1.0);
+  if (palette == 1) return mix(vec3(0.12, 0.0, 0.38), vec3(1.0, 0.86, 0.25), l);
+  if (palette == 2) {
+    if (l < 0.25) return mix(vec3(0.02, 0.0, 0.15), vec3(0.45, 0.0, 0.6), l * 4.0);
+    if (l < 0.5) return mix(vec3(0.45, 0.0, 0.6), vec3(0.95, 0.15, 0.1), (l - 0.25) * 4.0);
+    if (l < 0.75) return mix(vec3(0.95, 0.15, 0.1), vec3(1.0, 0.8, 0.1), (l - 0.5) * 4.0);
+    return mix(vec3(1.0, 0.8, 0.1), vec3(1.0), (l - 0.75) * 4.0);
+  }
+  if (palette == 3) return mix(vec3(0.04, 0.17, 0.42), vec3(0.93, 0.96, 1.0), l);
+  return l * vec3(0.15, 1.0, 0.35) + pow(l, 4.0) * 0.4;
+}
 
 const vec2 TAPS[12] = vec2[](
   vec2(-0.326, -0.406), vec2(-0.840, -0.074), vec2(-0.696, 0.457), vec2(-0.203, 0.621),
@@ -62,7 +120,77 @@ void main() {
   float ta = (texSize.x * (1.0 - 2.0 * crop.x)) / (texSize.y * (1.0 - 2.0 * crop.y));
   vec2 uv = vUv;
 
+  // screen grids: the picture is read once, at the middle of the coarsest active cell; every active grid
+  // then shapes its own cell after the colour chain, so they layer (LED blocks made of dots, dithered dots)
+  vec2 scr = vUv * outSize;
+  float k720 = outSize.y / 720.0, coarse = 0.0;
+  vec2 ditI = vec2(0.0), ledF = vec2(0.0), dotF = vec2(0.0);
+  float dotPx = 1.0;
+  if (dither > 0.0) {
+    float px = floor(mix(2.0, 9.0, dither) * k720 + 0.5);
+    ditI = floor(scr / px);
+    coarse = px; uv = (ditI + 0.5) * px / outSize;
+  }
+  if (ledWall > 0.0) {
+    float px = mix(8.0, 70.0, ledWall) * k720;
+    vec2 sz = vec2(px * 1.5, px), q = scr / sz, i = floor(q);
+    ledF = q - i - 0.5;
+    if (px > coarse) { coarse = px; uv = (i + 0.5) * sz / outSize; }
+  }
+  if (halftone > 0.0) {
+    dotPx = mix(5.0, 40.0, halftone) * k720;
+    const mat2 R = mat2(0.7071, 0.7071, -0.7071, 0.7071);       // the screen is turned 45 degrees, as in print
+    vec2 q = R * scr / dotPx, i = floor(q);
+    dotF = q - i - 0.5;
+    if (dotPx > coarse) { coarse = dotPx; uv = transpose(R) * ((i + 0.5) * dotPx) / outSize; }
+  }
+  vec2 chrF = vec2(0.0);
+  if (ascii > 0.0) {
+    float px = mix(8.0, 48.0, ascii) * k720;
+    vec2 sz = vec2(px * 0.7, px), q = scr / sz, i = floor(q);
+    chrF = q - i;
+    if (px > coarse) { coarse = px; uv = (i + 0.5) * sz / outSize; }
+  }
+
+  if (stretch > 0.0) uv.x = min(uv.x, 1.0 - stretch);
+  else if (stretch < 0.0) uv.y = max(uv.y, -stretch);
+  if (stretchGrid > 0.0) {          // rows first, then each row cuts its own columns
+    float y = unstretch(uv.y, 0.0, stretchGrid);
+    uv = vec2(unstretch(uv.x, 1.0 + floor(y * 5.0), stretchGrid), y);
+  }
+  if (interference > 0.0) uv.x += sin(vUv.y * 40.0 + time * 6.0) * 0.006 * interference;
+
+  // band glitch: the picture is cut into bands, re-rolled eight times a second; a hit band jumps sideways,
+  // repeats a crop of itself or splits its colours
+  float split = rgbShift * 0.04;
+  if (glitch > 0.0) {
+    float tick = floor(time * 8.0);
+    float bh = 0.03 + 0.13 * hash(vec2(tick, 1.0));
+    float band = floor(uv.y / bh + hash(vec2(tick, 2.0)));
+    if (hash(vec2(band, tick)) < glitch * 0.8) {
+      float r2 = hash(vec2(band + 7.0, tick)), r3 = hash(vec2(band + 13.0, tick));
+      uv.x += (r2 - 0.5) * 0.6 * glitch;
+      if (r3 < 0.4) { float w = 0.04 + 0.2 * r2; uv.x = r2 * (1.0 - w) + mod(uv.x, w); }
+      else if (r3 > 0.65) split += 0.05 * glitch;
+      uv.x = fract(uv.x);
+    }
+  }
+
   vec2 d = (uv - 0.5) * vec2(ca, 1.0);
+  if (fisheye != 0.0) {             // lens bulge: the middle swells, the rim crowds in; below zero the reverse. Top and bottom edges stay put
+    float k = fisheye > 0.0 ? fisheye * 4.0 : fisheye * 0.8;
+    d *= (1.0 + k * dot(d, d)) / (1.0 + k * 0.25);
+  }
+  if (spiral != 0.0) {              // wrung around the middle, the rim held still
+    float k = max(0.0, 1.0 - length(d) / 0.9);
+    float a = spiral * 6.0 * k * k, sn = sin(a), cs = cos(a);
+    d = mat2(cs, -sn, sn, cs) * d;
+  }
+  if (ripple > 0.0) {               // rings spreading from the middle
+    float r = length(d);
+    d += (r > 0.0 ? d / r : vec2(0.0)) * sin(r * 36.0 - time * 5.0) * 0.035 * ripple;
+  }
+  if (warp > 0.0) d += (noise2(d * 2.5 + vec2(time * 0.25, -time * 0.18)) - 0.5) * 0.45 * warp;
   if (kaleido >= 2) {
     float seg = 2.0 * PI / float(kaleido);
     float a = atan(d.y, d.x), r = length(d);
@@ -85,8 +213,40 @@ void main() {
   vec2 t = (uv - 0.5) * s + 0.5;
 
   vec4 c = sampleTex(t);
-  if (rgbShift > 0.0) {
-    vec2 sh = vec2(rgbShift * 0.04, 0.0);
+  float lineMask = 1.0;
+  if (lumalines > 0.0) {            // ridge lines, front to back: the first line this pixel sits on is drawn, anything under a ridge is hidden
+    float n = mix(90.0, 24.0, lumalines), h = 1.0 / n, amp = 3.5 * h;
+    float j0 = floor(t.y * n);
+    vec4 hit = vec4(0.0); lineMask = 0.0;
+    for (float j = 4.0; j >= 0.0; j--) {
+      float base = (j0 - j + 0.5) * h;
+      vec4 sm = sampleTex(vec2(t.x, base));
+      float top = base + amp * luma(sm.rgb) * sm.a;
+      if (abs(t.y - top) < h * 0.16) { hit = sm; lineMask = 1.0; break; }
+      if (t.y < top) break;
+    }
+    c = vec4(hit.rgb, c.a);
+  }
+  if (radialBlur != 0.0) {
+    vec4 acc = vec4(0.0);
+    vec2 p = (t - 0.5) * vec2(ta, 1.0);
+    for (float i = 0.0; i < 14.0; i++) {
+      float f = (i + hash(scr + i)) / 14.0 * abs(radialBlur);
+      vec2 q = p * (1.0 - 0.35 * f);
+      if (radialBlur < 0.0) { float a = 0.5 * f, sn = sin(a), cs = cos(a); q = mat2(cs, -sn, sn, cs) * p; }
+      acc += sampleTex(q / vec2(ta, 1.0) + 0.5);
+    }
+    c = vec4(acc.rgb / 14.0, max(c.a, acc.a / 14.0));
+  }
+  if (riso > 0.0) {                 // each ink is one channel's shadow, printed a little off, in four strengths
+    vec2 off = vec2(0.004 + 0.02 * riso, 0.002 + 0.008 * riso);
+    vec3 dens = 1.0 - vec3(sampleTex(t - off).r, c.g, sampleTex(t + off).b);
+    dens = floor(dens * 3.0 + 0.5 + (hash(scr) - 0.5) * 0.5) / 3.0;
+    vec3 paper = vec3(0.96, 0.94, 0.88);
+    c.rgb = paper * mix(vec3(1.0), vec3(0.0, 0.47, 0.75), dens.r) * mix(vec3(1.0), vec3(1.0, 0.28, 0.5), dens.g) * mix(vec3(1.0), vec3(1.0, 0.9, 0.1), dens.b);
+  }
+  if (split > 0.0) {
+    vec2 sh = vec2(split, 0.0);
     c.r = sampleTex(t + sh).r;
     c.b = sampleTex(t - sh).b;
   }
@@ -101,11 +261,55 @@ void main() {
 
   vec3 col = c.rgb * brightness;
   col = (col - 0.5) * contrast + 0.5;
-  float l = dot(col, vec3(0.299, 0.587, 0.114));
+  float l = luma(col);
   col = mix(vec3(l), col, saturate);
+  if (edges > 0) {                  // brightness gradient over a 3-pixel cross
+    vec2 e = 1.5 / outSize * s;
+    vec2 g = vec2(luma(sampleTex(t + vec2(e.x, 0.0)).rgb) - luma(sampleTex(t - vec2(e.x, 0.0)).rgb),
+                  luma(sampleTex(t + vec2(0.0, e.y)).rgb) - luma(sampleTex(t - vec2(0.0, e.y)).rgb));
+    float line = clamp(length(g) * 5.0 * contrast * brightness, 0.0, 1.0);
+    if (edges == 1) col = vec3(line);
+    else if (edges == 2) col = mix(col, vec3(1.0), line);
+    else col = line * 1.6 * mix(vec3(0.62, 0.2, 1.0), vec3(0.1, 0.95, 1.0), 0.5 + 0.5 * sin(atan(g.y, g.x) * 2.0));
+  }
+  if (palette > 0) col = paletteMap(luma(col));
   if (hue != 0.0) col = hueRotate(col, hue);
   if (posterize >= 2.0) col = floor(col * posterize + 0.5) / posterize;
-  if (threshold > 0.0) col = vec3(step(threshold, dot(col, vec3(0.299, 0.587, 0.114))));
+  if (threshold > 0.0) col = vec3(step(threshold, luma(col)));
+  col = clamp(col, 0.0, 1.0);
+  if (lumalines > 0.0) col = lineMask * mix(col, col / max(max(col.r, max(col.g, col.b)), 0.02), 0.6);
+  if (scanMod > 0.0) {              // one line per row, as thick as the picture is bright
+    float n = mix(160.0, 30.0, scanMod), w = pow(luma(col), 0.7) * 0.5;
+    float e = abs(fract(vUv.y * n) - 0.5), aa = n / outSize.y;
+    col = col / max(luma(col), 0.05) * 0.8 * smoothstep(w + aa, w - aa, e);
+    col = min(col, vec3(1.0));
+  }
+  if (interference > 0.0) {         // lines and rainbow fringes whose phase rides on the brightness
+    float ph = vUv.y * 180.0 + luma(col) * 14.0 + sin(vUv.y * 23.0 + time * 3.0) * 3.0 + time * 7.0;
+    float ln = 0.5 + 0.5 * sin(ph);
+    vec3 rb = 0.5 + 0.5 * cos(ph * 0.21 + vec3(0.0, 2.1, 4.2));
+    col = mix(col, col * (0.35 + 0.9 * ln) + rb * ln * 0.45 * (0.3 + luma(col)), interference);
+  }
+  float v = max(col.r, max(col.g, col.b));          // dot size comes from the brightness before the dither
+  if (dither > 0.0) {               // ordered dither down to eight colours
+    ivec2 ci = ivec2(ditI) & 3;
+    col = step(vec3((BAYER[ci.y * 4 + ci.x] + 0.5) / 16.0), col);
+  }
+  if (halftone > 0.0) {             // dots that grow with brightness, in the picture's own hue (or the dither's colours)
+    float aa = 1.0 / dotPx;
+    if (dither <= 0.0) col = mix(col, col / max(v, 0.02), smoothstep(0.05, 0.3, v));
+    col *= smoothstep(aa, -aa, length(dotF) - sqrt(v) * 0.72);
+  }
+  if (ledWall > 0.0) {              // glowing blocks with dark seams
+    float m = smoothstep(0.5, 0.36, max(abs(ledF.x), abs(ledF.y)));
+    col *= mix(0.06, 1.25, m);
+  }
+  if (ascii > 0.0) {                // the glyph is picked by brightness and drawn in the picture's hue
+    ivec2 g = ivec2(floor(chrF * vec2(6.0, 6.5) - vec2(0.5, 0.75)));
+    int on = (g.x >= 0 && g.x < 5 && g.y >= 0 && g.y < 5) ? (GLYPHS[int(clamp(v * 10.0, 0.0, 9.0))] >> ((4 - g.y) * 5 + g.x)) & 1 : 0;
+    col = mix(col, col / max(v, 0.02), smoothstep(0.05, 0.3, v)) * float(on);
+  }
+  if (grain > 0.0) col += (hash(scr + floor(time * 24.0) * 7.31) - 0.5) * 0.6 * grain;
   col = mix(col, 1.0 - col, invert);
   o = vec4(clamp(col, 0.0, 1.0), 1.0);
 }`;
@@ -506,6 +710,59 @@ export function createRenderer(canvas) {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
 
+  // Generators (generators.js): a deck's picture drawn by a shader into genFbo, which the deck
+  // pass then reads in place of the video texture. Programs are compiled on first use.
+  const genProgs = {};
+  const genImg = { A: { t: texture(), stamp: null }, B: { t: texture(), stamp: null }, thumb: { t: texture(), stamp: null } };
+  let genFbo = null, thumbFbo = null;
+  function genProgram(id) {
+    if (!(id in genProgs)) {
+      try { genProgs[id] = program(genShader(GEN_BY_ID[id])); }
+      catch (e) { console.error('generator ' + id + ' failed to compile', e); genProgs[id] = null; }
+    }
+    return genProgs[id];
+  }
+  // g: { id, time, a, b, c, image?: { el, w, h, stamp } }; slot: whose picture texture to use
+  function drawGen(fbo, slot, g) {
+    const prog = GEN_BY_ID[g.id] ? genProgram(g.id) : null;
+    if (!prog) return false;
+    const im = genImg[slot];
+    let has = false;
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, im.t);
+    if (g.image) {
+      if (im.stamp !== g.image.stamp) {
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        try { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, g.image.el); im.stamp = g.image.stamp; }
+        catch (e) { im.stamp = null; }
+        finally { gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false); }
+      }
+      has = im.stamp === g.image.stamp;
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo.fb);
+    gl.viewport(0, 0, fbo.w, fbo.h);
+    gl.useProgram(prog.p);
+    const u = prog.u;
+    gl.uniform1i(u.img, 0);
+    gl.uniform1f(u.hasImg, has ? 1 : 0);
+    gl.uniform2f(u.imgSize, has ? g.image.w : 1, has ? g.image.h : 1);
+    gl.uniform2f(u.size, fbo.w, fbo.h);
+    gl.uniform1f(u.time, g.time);
+    gl.uniform1f(u.a, g.a ?? 0.5); gl.uniform1f(u.b, g.b ?? 0.5); gl.uniform1f(u.c, g.c ?? 0.5);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    return true;
+  }
+  // One still of a generator for its library card: RGBA bytes, top row first.
+  function genThumb(g, w, h) {
+    if (!thumbFbo || thumbFbo.w !== w || thumbFbo.h !== h) thumbFbo = target(w, h);
+    gl.bindVertexArray(vao);
+    gl.disable(gl.BLEND); gl.disable(gl.SCISSOR_TEST);
+    if (!drawGen(thumbFbo, 'thumb', g)) return null;
+    const px = new Uint8Array(w * h * 4), out = new Uint8ClampedArray(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    for (let y = 0; y < h; y++) out.set(px.subarray((h - 1 - y) * w * 4, (h - y) * w * 4), y * w * 4);
+    return out;
+  }
+
   let W = 0, H = 0, deckFbo = null, ping = null, pingIndex = 0, tvFbo = null, vhsFbo = null;
   // Internal render size (the framebuffers). The canvas itself may be larger
   // or smaller; panes are scaled on blit.
@@ -514,6 +771,7 @@ export function createRenderer(canvas) {
     if (w === W && h === H) return;
     W = w; H = h;
     deckFbo = { A: target(w, h), B: target(w, h) };
+    genFbo = { A: target(w, h), B: target(w, h) };
     ping = [target(w, h), target(w, h)];
     tvFbo = target(w, h);
     vhsFbo = target(w, h);
@@ -539,7 +797,8 @@ export function createRenderer(canvas) {
     return true;
   }
 
-  function drawDeck(name, params, has) {
+  function drawDeck(name, params, has, time, gen) {
+    if (has && gen) has = drawGen(genFbo[name], name, gen);
     const fbo = deckFbo[name];
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo.fb);
     gl.viewport(0, 0, W, H);
@@ -547,8 +806,8 @@ export function createRenderer(canvas) {
     if (!has) return;
     gl.useProgram(deckProg.p);
     const u = deckProg.u;
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, videoTex[name]); gl.uniform1i(u.tex, 0);
-    gl.uniform2f(u.texSize, videoSize[name][0], videoSize[name][1]);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, gen ? genFbo[name].t : videoTex[name]); gl.uniform1i(u.tex, 0);
+    if (gen) gl.uniform2f(u.texSize, W, H); else gl.uniform2f(u.texSize, videoSize[name][0], videoSize[name][1]);
     gl.uniform2f(u.outSize, W, H);
     gl.uniform1f(u.fitCover, params.fit === 'cover' ? 1 : 0);
     gl.uniform1f(u.zoom, params.zoom || 1);
@@ -566,6 +825,16 @@ export function createRenderer(canvas) {
     gl.uniform1f(u.blur, params.blur || 0);
     gl.uniform1i(u.mirror, params.mirror || 0);
     gl.uniform1i(u.kaleido, params.kaleido || 0);
+    gl.uniform1f(u.halftone, params.halftone || 0);
+    gl.uniform1f(u.dither, params.dither || 0);
+    gl.uniform1f(u.ledWall, params.ledWall || 0);
+    gl.uniform1f(u.ripple, params.ripple || 0);
+    gl.uniform1f(u.spiral, params.spiral || 0);
+    gl.uniform1f(u.glitch, params.glitch || 0);
+    gl.uniform1i(u.palette, params.palette || 0);
+    gl.uniform1i(u.edges, params.edges || 0);
+    for (const k of ['ascii', 'riso', 'warp', 'stretchGrid', 'interference', 'grain', 'radialBlur', 'stretch', 'lumalines', 'scanMod', 'fisheye']) gl.uniform1f(u[k], params[k] || 0);
+    gl.uniform1f(u.time, time % 3600);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
@@ -621,15 +890,15 @@ export function createRenderer(canvas) {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
-  // decks: { A: { params, active }, B }   master: { crossfade, feedback, fbZoom, fbRotate, fbHue, strobe, tv... }
+  // decks: { A: { params, active, gen? }, B }   (gen: a generator's frame, see drawGen)   master: { crossfade, feedback, fbZoom, fbRotate, fbHue, strobe, tv... }
   // panes: { out: [x, y, w, h], A?: [...], B?: [...] } in canvas pixels, y from the top
   function render(decks, master, time, panes) {
     if (!deckFbo) return;
     gl.bindVertexArray(vao);
     gl.disable(gl.BLEND);
     gl.disable(gl.SCISSOR_TEST);
-    drawDeck('A', decks.A.params, decks.A.active);
-    drawDeck('B', decks.B.params, decks.B.active);
+    drawDeck('A', decks.A.params, decks.A.active, time, decks.A.gen);
+    drawDeck('B', decks.B.params, decks.B.active, time, decks.B.gen);
 
     const [mA, mB] = crossfadeWeights(master.crossfade, decks.B.params.blend);
     const wA = (decks.A.params.opacity ?? 1) * mA;
@@ -688,7 +957,7 @@ export function createRenderer(canvas) {
 
   const dbg = gl.getExtension('WEBGL_debug_renderer_info');
   return {
-    gl, resize, setCanvasSize, upload, render, clear,
+    gl, resize, setCanvasSize, upload, render, clear, genThumb,
     info: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'webgl2',
   };
 }

@@ -16,6 +16,8 @@
 
 import { createRenderer, crossfadeWeights } from './gl.js';
 import { TV_DEFAULTS } from './tv.js';
+import { OVERLAY_DEFAULTS, createOverlay } from './overlay.js';
+import { GEN_DEFAULTS, GEN_BY_ID, drawText } from './generators.js';
 
 export const DEFAULT_PARAMS = {
   opacity: 1, speed: 1, loop: true, fit: 'contain', blend: 'normal',
@@ -23,6 +25,9 @@ export const DEFAULT_PARAMS = {
   // WebGL only
   zoom: 1, rotate: 0, pixelate: 0, rgbShift: 0, posterize: 0, threshold: 0, mirror: 0, kaleido: 0,
   cropX: 0, cropY: 0,
+  palette: 0, edges: 0, halftone: 0, dither: 0, ledWall: 0, ripple: 0, spiral: 0, glitch: 0,
+  ascii: 0, riso: 0, warp: 0, radialBlur: 0, stretch: 0, stretchGrid: 0, interference: 0, grain: 0, lumalines: 0, scanMod: 0, fisheye: 0,
+  ...GEN_DEFAULTS,     // a generator's three sliders and its text: genA, genB, genC, genText
 };
 export const DEFAULT_MASTER = {
   crossfade: 0, blackout: false, feedback: 0, fbZoom: 1, fbRotate: 0, fbHue: 0, strobe: 0, scale: 0.75,
@@ -30,6 +35,7 @@ export const DEFAULT_MASTER = {
   vhs: 0, vhsTrack: 0,                                // worn tape and its mistracking band
   crt: 0, crtCurve: 0,                                // picture tube: scanlines and mask, bulge
   ...TV_DEFAULTS,      // the TV set: tvSignal, tvVHold, tvHHold, tvGhost, tvDelay, tvHum, tvBright
+  ...OVERLAY_DEFAULTS, // the image overlay: ovOpacity, ovSize, ovX, ovY, ovBlend, ovBounce
 };
 
 // Hosts known to send CORS headers on their video files. archive.org is NOT
@@ -38,7 +44,7 @@ export const DEFAULT_MASTER = {
 const CORS_HOSTS = [];
 
 export function canUseGl(source) {
-  if (source.kind === 'file') return true;
+  if (source.kind === 'file' || source.kind === 'gen') return true;
   try {
     const u = new URL(source.url, location.href);
     if (u.origin === location.origin) return true;
@@ -50,8 +56,10 @@ const cssBlend = (b) => (b === 'add' ? 'plus-lighter' : b);
 const LOAD_TIMEOUT = { file: 15000, url: 45000 };
 
 export class Stage {
-  // opts: { videos: {A, B}, canvas, layout: (stage) => ({ canvas: [w, h], fbo: [w, h], panes: {out, A?, B?} }), onEvent? }
+  // opts: { videos: {A, B}, canvas, layout: (stage) => ({ canvas: [w, h], fbo: [w, h], panes: {out, A?, B?} }), onEvent?,
+  //         overlay?: { host, zIndex?, before? } – where the image overlay goes: host's box is the output picture }
   constructor(opts) {
+    this.overlay = opts.overlay ? createOverlay(opts.overlay.host, opts.overlay.zIndex, opts.overlay.before) : null;
     this.videos = opts.videos;                      // the active element per deck
     this.standby = {};                              // the element the next clip loads into
     this.canvas = opts.canvas;
@@ -123,6 +131,7 @@ export class Stage {
     const nv = this.standby[name];
     if (d.pending) { d.pending.cancel(); d.pending = null; }
     const token = ++d.loadSeq;
+    if (source.kind === 'gen') { this._loadGen(name, source, meta || null); return; }
     this._release(nv);
     const wantGl = !!this.renderer && canUseGl(source);
     if (wantGl && source.kind === 'url') nv.crossOrigin = 'anonymous'; else nv.removeAttribute('crossorigin');
@@ -151,6 +160,53 @@ export class Stage {
     if (nv.readyState >= 3) onReady();
   }
 
+  // A generator needs no loading: it takes the deck at once, and the clip that was there is let go.
+  _loadGen(name, source, meta) {
+    const d = this.decks[name];
+    if (!this.renderer || !GEN_BY_ID[source.gen]) {
+      d.error = this.renderer ? `unknown generator "${source.gen}"` : 'generators need WebGL';
+      if (this.onEvent) this.onEvent({ deck: name, type: 'loadfail', why: d.error, meta });
+      return;
+    }
+    this._release(this.videos[name]);
+    d.meta = meta; d.error = null; d.source = source; d.in = 0; d.out = null; d.skips = []; d.mode = 'gl';
+    d.gen = { id: source.gen, t: (meta && meta.time) || 0, paused: !this.enabled || !!(meta && meta.paused) };
+    this.applyCss(name);
+    if (this.onEvent) this.onEvent({ deck: name, type: 'loaded', meta });
+  }
+  // What the renderer needs to draw this frame of a deck's generator.
+  _genFrame(name) {
+    const d = this.decks[name], g = GEN_BY_ID[d.gen.id], p = d.params;
+    let image = null;
+    if (g.uses === 'overlay' && this.overlay && this.overlay.size) {
+      image = { el: this.overlay.el, w: this.overlay.size[0], h: this.overlay.size[1], stamp: 'ov:' + this.overlay.el.src };
+    } else if (g.uses === 'text') {
+      const text = String(p.genText ?? '');
+      if (d.gen.text !== text) { d.gen.text = text; d.gen.canvas = drawText(d.gen.cv || (d.gen.cv = document.createElement('canvas')), text); }
+      if (d.gen.canvas) image = { el: d.gen.canvas, w: d.gen.canvas.width, h: d.gen.canvas.height, stamp: 'text:' + text };
+    }
+    return { id: d.gen.id, time: d.gen.t, a: p.genA, b: p.genB, c: p.genC, image };
+  }
+  // A still of a generator for its library card, as a data URL ('' without WebGL).
+  genThumb(id, w = 160, h = 90) {
+    const g = GEN_BY_ID[id];
+    if (!this.renderer || !g) return '';
+    let image = null;
+    if (g.uses === 'text') { const cv = drawText(document.createElement('canvas'), GEN_DEFAULTS.genText); image = { el: cv, w: cv.width, h: cv.height, stamp: 'thumb-text' }; }
+    const px = this.renderer.genThumb({ id, time: 4.2, a: 0.5, b: 0.5, c: 0.5, image }, w, h);
+    if (!px) return '';
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+    cv.getContext('2d').putImageData(new ImageData(px, w, h), 0, 0);
+    return cv.toDataURL('image/jpeg', 0.75);
+  }
+  // Keep a generator in step with another stage's (the controller's preview follows the player).
+  syncGen(name, time, paused) {
+    const g = this.decks[name].gen;
+    if (!g) return;
+    g.paused = !!paused || !this.enabled;
+    if (Math.abs(g.t - time) > 0.3) g.t = time;
+  }
+
   _commit(name) {
     const d = this.decks[name], p = d.pending;
     d.pending = null;
@@ -162,7 +218,7 @@ export class Stage {
     d.meta = p.meta; d.error = null; d.source = p.source;
     d.in = (p.meta && p.meta.in) || 0; d.out = (p.meta && p.meta.out) || null;
     d.skips = (p.meta && p.meta.skips) || [];
-    d.mode = p.wantGl ? 'gl' : 'css';
+    d.mode = p.wantGl ? 'gl' : 'css'; d.gen = null;
     this._release(old);
     this._watchActive(name, nv);
     this.applyCss(name);
@@ -170,10 +226,14 @@ export class Stage {
     if (this.onEvent) this.onEvent({ deck: name, type: 'loaded', meta: p.meta });
   }
 
-  play(name) { const p = this.videos[name].play(); if (p) p.catch(() => {}); }
-  pause(name) { this.videos[name].pause(); }
-  restart(name) { this.videos[name].currentTime = this.decks[name].in; this.play(name); }
-  seek(name, t) { this.videos[name].currentTime = t; }
+  play(name) {
+    const g = this.decks[name].gen;
+    if (g) { g.paused = false; return; }
+    const p = this.videos[name].play(); if (p) p.catch(() => {});
+  }
+  pause(name) { const g = this.decks[name].gen; if (g) g.paused = true; else this.videos[name].pause(); }
+  restart(name) { const g = this.decks[name].gen; if (g) g.t = 0; else this.videos[name].currentTime = this.decks[name].in; this.play(name); }
+  seek(name, t) { const g = this.decks[name].gen; if (g) g.t = Math.max(0, t); else this.videos[name].currentTime = t; }
   setParams(name, params) { Object.assign(this.decks[name].params, params); this.applyCss('A'); this.applyCss('B'); }
   setMaster(params) {
     const scaleChanged = 'scale' in params && params.scale !== this.master.scale;
@@ -185,7 +245,10 @@ export class Stage {
     this.enabled = on;
     for (const name of ['A', 'B']) { if (on) { if (this.decks[name].meta) this.play(name); } else this.pause(name); }
     if (!on && this.renderer) this.renderer.clear();
+    if (!on && this.overlay) this.overlay.update(this.master, false);
   }
+  // source: { file, name } | { url, name } | null
+  setOverlay(source) { if (this.overlay) this.overlay.set(source); }
 
   // CSS side: opacity/filters on the video layers, and the canvas blend mode
   // when deck B is on the canvas above a CSS deck A.
@@ -255,18 +318,24 @@ export class Stage {
       if (this.decks[name].mode === 'css') v.style.visibility = lit ? '' : 'hidden';
       else if (v.style.visibility) v.style.visibility = '';
     }
+    if (this.overlay) this.overlay.update(this.master, lit);
     if (!this.renderer) return;
     const decks = {};
     let anyGl = false;
+    const dt = Math.min(1, Math.max(0, (now - (this._last || now)) / 1000));
+    this._last = now;
     for (const name of ['A', 'B']) {
       const d = this.decks[name], v = this.videos[name];
-      let active = false;
-      if (d.mode === 'gl' && v.readyState >= 2) {
+      let active = false, gen = null;
+      if (d.gen) {                                           // a generator: its own clock, at the deck's speed
+        if (!d.gen.paused) d.gen.t += dt * (d.params.speed || 1);
+        gen = this._genFrame(name); active = true;
+      } else if (d.mode === 'gl' && v.readyState >= 2) {
         if (this.renderer.upload(name, v)) active = true;
         else { d.mode = 'css'; this.applyCss(name); }      // tainted after all: fall back
       }
       anyGl = anyGl || d.mode === 'gl';
-      decks[name] = { params: d.params, active };
+      decks[name] = { params: d.params, active, gen };
     }
     if (anyGl) this.renderer.render(decks, this.master, now / 1000, this._layout.panes);
     else this.renderer.clear();
@@ -279,12 +348,12 @@ export class Stage {
     for (const name of ['A', 'B']) {
       const d = this.decks[name], v = this.videos[name];
       decks[name] = {
-        time: v.currentTime, duration: isFinite(v.duration) ? v.duration : null,
-        paused: v.paused, ready: v.readyState >= 2, error: d.error, mode: d.mode,
+        time: d.gen ? d.gen.t : v.currentTime, duration: d.gen || !isFinite(v.duration) ? null : v.duration,
+        paused: d.gen ? d.gen.paused : v.paused, ready: d.gen ? true : v.readyState >= 2, error: d.error, mode: d.mode,
         loading: d.pending ? (d.pending.meta && d.pending.meta.key) || true : null,
         meta: d.meta, params: d.params,
       };
     }
-    return { decks, master: this.master, fps: this.fps, gpu: this.info };
+    return { decks, master: this.master, fps: this.fps, gpu: this.info, overlay: this.overlay ? this.overlay.name : null };
   }
 }

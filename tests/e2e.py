@@ -137,6 +137,39 @@ async def smoke(ctx, check, logs):
     back = gray(await player.screenshot())
     st = await ctrl.evaluate(PLAYER_STATUS)
     check("reset master fx brings back an untouched picture", diff(plain, back) < 0.3 and st["master"]["crt"] == 0 and st["master"]["fbKey"] == 0 and st["master"]["tvSignal"] == 1 and st["master"]["tvVHold"] == 0, [diff(plain, back), st["master"]])
+    # deck looks, one at a time on the paused clip
+    looks = {}
+    for k, v in (("palette", "2"), ("edges", "1"), ("halftone", "0.6"), ("dither", "0.6"), ("ledWall", "0.6"), ("ripple", "1"), ("spiral", "0.6"), ("glitch", "1"),
+                 ("ascii", "0.3"), ("riso", "0.5"), ("warp", "0.8"), ("radialBlur", "0.8"), ("stretch", "0.45"), ("stretchGrid", "1"),
+                 ("interference", "0.8"), ("grain", "1"), ("lumalines", "0.5"), ("scanMod", "0.5"), ("fisheye", "0.8")):
+        await ctrl.evaluate(SET_PARAM, ["A", k, v]); await ctrl.wait_for_timeout(500)
+        looks[k] = round(diff(plain, gray(await player.screenshot())), 2)
+        await ctrl.evaluate(SET_PARAM, ["A", k, "0"])
+    # the screen grids layer: LED blocks alone, dots alone, then both
+    grids = []
+    for led, dots in (("0.7", "0"), ("0", "0.15"), ("0.7", "0.15")):
+        await ctrl.evaluate(SET_PARAM, ["A", "ledWall", led]); await ctrl.evaluate(SET_PARAM, ["A", "halftone", dots]); await ctrl.wait_for_timeout(500)
+        grids.append(gray(await player.screenshot()))
+    check("LED wall and halftone layer instead of one replacing the other", min(diff(grids[2], grids[0]), diff(grids[2], grids[1])) > 1, [diff(grids[2], grids[0]), diff(grids[2], grids[1])])
+    await ctrl.evaluate(SET_PARAM, ["A", "ledWall", "0"]); await ctrl.evaluate(SET_PARAM, ["A", "halftone", "0"])
+    await ctrl.wait_for_timeout(500)
+    check("each of the 19 deck looks changes the picture", min(looks.values()) > 1, looks)
+    check("and leave it untouched when back at zero", diff(plain, gray(await player.screenshot())) < 0.3, diff(plain, gray(await player.screenshot())))
+    # image overlay: a white square over the output, moved, bouncing, then cleared
+    from PIL import Image
+    logo = os.path.join(OUT, "overlay-test.png"); Image.new("RGB", (200, 200), (255, 255, 255)).save(logo)
+    await ctrl.set_input_files("#ov-file", logo); await ctrl.wait_for_timeout(700)
+    centred = gray(await player.screenshot())
+    await ctrl.evaluate(SET_MASTER, ["ovX", "1"]); await ctrl.wait_for_timeout(400)
+    right = gray(await player.screenshot())
+    await ctrl.evaluate(SET_MASTER, ["ovBounce", "3"]); await ctrl.wait_for_timeout(300)
+    b1 = gray(await player.screenshot()); await ctrl.wait_for_timeout(600); b2 = gray(await player.screenshot())
+    st = await ctrl.evaluate(PLAYER_STATUS)
+    pv = await ctrl.evaluate("() => { const i = document.querySelector('.pane[data-pane=out] .overlay-image'); return !!i && i.style.display === 'block'; }")
+    check("image overlay shows on the output and in the preview, moves and bounces", diff(plain, centred) > 1 and diff(centred, right) > 1 and diff(b1, b2) > 0.5 and st.get("overlay") == "overlay-test.png" and pv, [diff(plain, centred), diff(centred, right), diff(b1, b2), st.get("overlay"), pv])
+    await ctrl.click("#ov-clear"); await ctrl.evaluate(SET_MASTER, ["ovBounce", "0"]); await ctrl.evaluate(SET_MASTER, ["ovX", "0"]); await ctrl.wait_for_timeout(500)
+    cleared = gray(await player.screenshot())
+    check("clearing the overlay brings back the plain picture", diff(plain, cleared) < 0.3, diff(plain, cleared))
     for k, v in (("kaleido", "5"), ("hue", "90"), ("pixelate", "0.3")): await ctrl.evaluate(SET_PARAM, ["A", k, v])
     await ctrl.wait_for_timeout(600)
     fx = gray(await player.screenshot())
@@ -147,7 +180,9 @@ async def smoke(ctx, check, logs):
     fb = gray(await player.screenshot())
     check("feedback trail changes the picture", diff(fx, fb) > 5, diff(fx, fb))
     await ctrl.evaluate(SET_MASTER, ["feedback", "0"]); await ctrl.evaluate(SET_MASTER, ["strobe", "2"]); await ctrl.wait_for_timeout(300)
-    shots = [mean(gray(await player.screenshot())) for _ in range(6)]
+    shots = []
+    for i in range(10):     # growing gaps, so the samples sweep the 0.5 s blink however long a screenshot takes
+        shots.append(mean(gray(await player.screenshot()))); await player.wait_for_timeout(70 * i)
     check("strobe blinks the output", min(shots) < 2 and max(shots) > 10, shots)
     await ctrl.evaluate(SET_MASTER, ["strobe", "0"])
     await ctrl.evaluate(SET_MASTER, ["crossfade", "0.3"]); await ctrl.wait_for_timeout(500)
@@ -157,6 +192,42 @@ async def smoke(ctx, check, logs):
     st = await ctrl.evaluate(PLAYER_STATUS)
     p = st["decks"]["A"]["params"]
     check("reset fx returns kaleido, hue, pixelate, opacity, speed", p["kaleido"] == 0 and p["hue"] == 0 and p["pixelate"] == 0 and p["opacity"] == 1 and p["speed"] == 1, p)
+    # generators: a shader as the deck's source, loaded from its own library tab
+    await ctrl.evaluate(SET_MASTER, ["crossfade", "0"])
+    await ctrl.click(".tabs button[data-tab=gen]")
+    try:
+        await ctrl.wait_for_function("document.querySelectorAll('#results .card').length === 10 && [...document.querySelectorAll('#results .card img')].every(i => i.src.startsWith('data:'))", timeout=20000)
+        listed = True
+    except Exception:
+        listed = False
+    check("generators tab lists ten generators with drawn thumbnails", listed, await ctrl.evaluate("[...document.querySelectorAll('#results .card img')].map(i => i.src.slice(0, 5))"))
+    gens = {}
+    await ctrl.select_option("#target-deck", "A")       # the A / B buttons only show on hover: click the card itself
+    for g in ("tunnel", "starfield", "grid", "bars", "nebula", "fractalgrid", "moire", "logo", "text", "plasma"):
+        await ctrl.click(f"#results .card[data-key='gen:{g}'] img"); await ctrl.wait_for_timeout(700)
+        a = gray(await player.screenshot()); await ctrl.wait_for_timeout(800); b = gray(await player.screenshot())
+        gens[g] = [max(a), diff(a, b)]
+    st = await ctrl.evaluate(PLAYER_STATUS)
+    dA = st["decks"]["A"]
+    check("every generator draws a moving picture on the player", all(m > 60 and d > 0.05 for m, d in gens.values()) and dA["mode"] == "gl" and not dA["error"] and dA["meta"]["key"] == "gen:plasma", [gens, dA["mode"], dA["error"]])
+    await ctrl.evaluate(CLICK_CMD, ["A", "pause"]); await ctrl.wait_for_timeout(500)
+    p1 = gray(await player.screenshot()); await ctrl.wait_for_timeout(500); p2 = gray(await player.screenshot())
+    await ctrl.evaluate(SET_PARAM, ["A", "genA", "0.95"]); await ctrl.wait_for_timeout(400)
+    p3 = gray(await player.screenshot())
+    await ctrl.evaluate(SET_PARAM, ["A", "kaleido", "5"]); await ctrl.wait_for_timeout(400)
+    p4 = gray(await player.screenshot())
+    await ctrl.evaluate(SET_PARAM, ["A", "kaleido", "0"])
+    ui = await ctrl.evaluate("() => { const d = document.querySelector('.deck[data-deck=A]'); return {row: !d.querySelector('.gen-params').classList.contains('hidden'), label: d.querySelector('.gen-label').textContent, text: !d.querySelector('.gen-text').classList.contains('hidden'), scrub: d.querySelector('.scrub').disabled, rowB: !document.querySelector('.deck[data-deck=B] .gen-params').classList.contains('hidden')}; }")
+    check("a paused generator holds still, its slider and a deck look change it, and the deck shows its controls",
+          diff(p1, p2) < 0.3 and diff(p2, p3) > 1 and diff(p3, p4) > 1 and ui == {"row": True, "label": "scale", "text": False, "scrub": True, "rowB": False}, [diff(p1, p2), diff(p2, p3), diff(p3, p4), ui])
+    await ctrl.click("#results .card[data-key='gen:text'] img"); await ctrl.wait_for_timeout(700)
+    await ctrl.evaluate(CLICK_CMD, ["A", "pause"]); await ctrl.wait_for_timeout(400)
+    t1 = gray(await player.screenshot())
+    await ctrl.evaluate(SET_PARAM, ["A", "genText", "HELLO WORLD 123"]); await ctrl.wait_for_timeout(500)
+    t2 = gray(await player.screenshot())
+    st = await ctrl.evaluate(PLAYER_STATUS)
+    shown = await ctrl.evaluate("!document.querySelector('.deck[data-deck=A] .gen-text').classList.contains('hidden')")
+    check("the text generator shows its text box and draws what is typed", diff(t1, t2) > 0.5 and shown and st["decks"]["A"]["params"]["genText"] == "HELLO WORLD 123", [diff(t1, t2), shown])
     await ctrl.screenshot(path=os.path.join(OUT, "smoke_controller.png"))
     await player.screenshot(path=os.path.join(OUT, "smoke_player.png"))
 

@@ -38,6 +38,7 @@
         <button data-tab="destockd" class="active">Destockd</button>
         <button data-tab="spelunkr">Spelunkr</button>
         <button data-tab="mia" title="Moving Image Archive: public domain films cut by the shot, with a search that reads the picture">Moving Image</button>
+        <button data-tab="gen" title="Generators: pictures drawn by a shader instead of played from a clip. They load onto a deck like a clip and take every effect.">Generators</button>
         <button data-tab="url">URL</button>
         <button data-tab="youtube" class="hidden">YouTube</button>
       </nav>
@@ -105,6 +106,18 @@
           <label title="TV set: raises the tube's black level, so the blanking bar and sync pulses show when the picture rolls or tears">tv bright <input type="range" data-master="tvBright" min="0" max="1" step="0.01" value="0"><output></output></label>
           <label title="Picture tube: 240 scanlines, phosphor stripes and a vignette on the projector output">crt <input type="range" data-master="crt" min="0" max="1" step="0.01" value="0"><output></output></label>
           <label title="Picture tube: bulge of the glass; the corners pull in and go black">crt curve <input type="range" data-master="crtCurve" min="0" max="1" step="0.01" value="0"><output></output></label>
+          <div class="ov-row" title="Image overlay: a picture (PNG, GIF, WebP, SVG…) laid over the whole output, after the master effects. Animated images keep moving.">
+            <button id="ov-pick" class="small">overlay image…</button> <span id="ov-name" class="muted">no image</span> <button id="ov-clear" class="small">clear</button>
+            <input type="file" id="ov-file" accept="image/*" hidden>
+          </div>
+          <label title="Overlay image: opacity">ov opacity <input type="range" data-master="ovOpacity" min="0" max="1" step="0.01" value="1"><output></output></label>
+          <label title="Overlay image: size as a fraction of the output; at 1 it fills it, as a frame would">ov size <input type="range" data-master="ovSize" min="0.05" max="2" step="0.01" value="0.3"><output></output></label>
+          <label title="Overlay image: left to right, edge to edge">ov x <input type="range" data-master="ovX" min="-1" max="1" step="0.01" value="0"><output></output></label>
+          <label title="Overlay image: bottom to top, edge to edge">ov y <input type="range" data-master="ovY" min="-1" max="1" step="0.01" value="0"><output></output></label>
+          <label title="Overlay image: above zero it travels and bounces off the edges like a DVD player's idle logo; the slider is the speed">ov bounce <input type="range" data-master="ovBounce" min="0" max="3" step="0.05" value="0"><output></output></label>
+          <label title="Overlay image: how it combines with the picture under it">ov blend <select data-master="ovBlend">
+            <option>normal</option><option>screen</option><option>add</option><option>multiply</option><option>difference</option><option>lighten</option><option>overlay</option>
+          </select></label>
           <label>render <select data-master="scale"><option value="0.5">50%</option><option value="0.75" selected>75%</option><option value="1">100%</option></select></label>
           <button class="reset" id="master-reset">reset master fx</button>
         </div>
@@ -147,6 +160,12 @@
           <option>exclusion</option><option>add</option>
         </select></label>
       </div>
+      <div class="params gen-params hidden" title="This deck plays a generator: these shape its picture, the speed slider sets its pace">
+        <label><span class="gen-label">a</span> <input type="range" data-param="genA" min="0" max="1" step="0.01" value="0.5"><output></output></label>
+        <label><span class="gen-label">b</span> <input type="range" data-param="genB" min="0" max="1" step="0.01" value="0.5"><output></output></label>
+        <label><span class="gen-label">c</span> <input type="range" data-param="genC" min="0" max="1" step="0.01" value="0.5"><output></output></label>
+        <label class="gen-text">text <input type="text" data-param="genText" maxlength="80" value="VJ ELATO" autocomplete="off"></label>
+      </div>
       <div class="params">
         <label>opacity <input type="range" data-param="opacity" min="0" max="1" step="0.01" value="1"><output></output></label>
         <label>speed <input type="range" data-param="speed" min="0.1" max="3" step="0.05" value="1"><output></output></label>
@@ -166,6 +185,25 @@
         <label><span>threshold <small>gl</small></span> <input type="range" data-param="threshold" min="0" max="1" step="0.01" value="0"><output></output></label>
         <label><span>mirror <small>gl</small></span> <input type="range" data-param="mirror" data-steps="0,1,2,3" data-labels="off,left–right,top–bottom,quad" min="0" max="3" step="1" value="0"><output></output></label>
         <label><span>kaleido <small>gl</small></span> <input type="range" data-param="kaleido" data-steps="0,3,4,5,6,8,12,16" data-labels="off,3,4,5,6,8,12,16" min="0" max="7" step="1" value="0"><output></output></label>
+        <label><span>palette <small>gl</small></span> <input type="range" data-param="palette" data-steps="0,1,2,3,4" data-labels="off,duotone,thermal,cyanotype,phosphor" min="0" max="4" step="1" value="0"><output></output></label>
+        <label><span>edges <small>gl</small></span> <input type="range" data-param="edges" data-steps="0,1,2,3" data-labels="off,outline,over picture,neon" min="0" max="3" step="1" value="0"><output></output></label>
+        <label><span>halftone <small>gl</small></span> <input type="range" data-param="halftone" min="0" max="1" step="0.01" value="0"><output></output></label>
+        <label><span>dither <small>gl</small></span> <input type="range" data-param="dither" min="0" max="1" step="0.01" value="0"><output></output></label>
+        <label><span>led wall <small>gl</small></span> <input type="range" data-param="ledWall" min="0" max="1" step="0.01" value="0"><output></output></label>
+        <label><span>ripple <small>gl</small></span> <input type="range" data-param="ripple" min="0" max="1" step="0.01" value="0"><output></output></label>
+        <label><span>spiral <small>gl</small></span> <input type="range" data-param="spiral" min="-1" max="1" step="0.01" value="0"><output></output></label>
+        <label><span>glitch <small>gl</small></span> <input type="range" data-param="glitch" min="0" max="1" step="0.01" value="0"><output></output></label>
+        <label><span>fisheye <small>gl</small></span> <input type="range" data-param="fisheye" min="-1" max="1" step="0.01" value="0"><output></output></label>
+        <label><span>ascii <small>gl</small></span> <input type="range" data-param="ascii" min="0" max="1" step="0.01" value="0"><output></output></label>
+        <label><span>riso <small>gl</small></span> <input type="range" data-param="riso" min="0" max="1" step="0.01" value="0"><output></output></label>
+        <label><span>warp <small>gl</small></span> <input type="range" data-param="warp" min="0" max="1" step="0.01" value="0"><output></output></label>
+        <label><span>radial blur <small>gl</small></span> <input type="range" data-param="radialBlur" min="-1" max="1" step="0.01" value="0"><output></output></label>
+        <label><span>stretch <small>gl</small></span> <input type="range" data-param="stretch" min="-1" max="1" step="0.01" value="0"><output></output></label>
+        <label><span>stretchy grid <small>gl</small></span> <input type="range" data-param="stretchGrid" min="0" max="1" step="0.01" value="0"><output></output></label>
+        <label><span>interference <small>gl</small></span> <input type="range" data-param="interference" min="0" max="1" step="0.01" value="0"><output></output></label>
+        <label><span>grain <small>gl</small></span> <input type="range" data-param="grain" min="0" max="1" step="0.01" value="0"><output></output></label>
+        <label><span>lumalines <small>gl</small></span> <input type="range" data-param="lumalines" min="0" max="1" step="0.01" value="0"><output></output></label>
+        <label><span>scan lines <small>gl</small></span> <input type="range" data-param="scanMod" min="0" max="1" step="0.01" value="0"><output></output></label>
         <button class="reset">reset fx</button>
       </div>
     </div>

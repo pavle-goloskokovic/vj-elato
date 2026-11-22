@@ -1,10 +1,11 @@
 import { createBus } from './bus.js';
 import { loadCatalogs, destockdAll, destockdCollection, spelunkrAll, miaAll, miaCollection, miaFromApi, fmtBytes, fmtTime } from './catalog.js';
-import { supportsFolders, pickFolder, restoreFolder, requestAccess, scanFolder, scanServer, getFile, localThumb, saveCollections, COLLECTIONS_FILE } from './library.js';
+import { supportsFolders, pickFolder, restoreFolder, requestAccess, scanFolder, scanServer, getFile, localThumb, saveCollections, COLLECTIONS_FILE, kvGet, kvSet } from './library.js';
 import { Stage, DEFAULT_PARAMS, DEFAULT_MASTER } from './stage.js';
 import { createLog } from './log.js';
 import { createMidi } from './midi.js';
 import { createLightShow } from './lightshow.js';
+import { GENERATORS, GEN_BY_ID } from './generators.js';
 
 const log = createLog('controller');
 
@@ -13,8 +14,8 @@ const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const bus = createBus('controller');
 // "reset fx" on a deck puts every control back except loop and fit; on the master it
 // leaves the crossfader, blackout and render size alone.
-const KEEP_ON_RESET = new Set(['loop', 'fit']);
-const KEEP_ON_MASTER_RESET = new Set(['crossfade', 'blackout', 'scale']);
+const KEEP_ON_RESET = new Set(['loop', 'fit', 'genA', 'genB', 'genC', 'genText']);   // a generator's sliders shape the source, they are not effects
+const KEEP_ON_MASTER_RESET = new Set(['crossfade', 'blackout', 'scale', 'ovOpacity', 'ovSize', 'ovX', 'ovY', 'ovBlend', 'ovBounce']);
 const STORE_KEY = 'vj-elato-controller';
 
 const state = {
@@ -41,6 +42,7 @@ const paneEls = { A: $('.pane[data-pane=A]', strip), out: $('.pane[data-pane=out
 const preview = new Stage({
   videos: { A: $('#pvA'), B: $('#pvB') },
   canvas: $('#preview-gl'),
+  overlay: { host: paneEls.out, zIndex: 4 },
   layout: () => {
     const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     const sr = strip.getBoundingClientRect();
@@ -75,6 +77,7 @@ const steps = (input) => input.dataset.steps ? input.dataset.steps.split(',').ma
 function readInput(input) {
   if (input.type === 'checkbox') return input.checked;
   if (input.tagName === 'SELECT') return isNaN(Number(input.value)) ? input.value : Number(input.value);
+  if (input.type === 'text') return input.value;
   const st = steps(input);
   if (st) return st[Math.min(st.length - 1, Math.max(0, Math.round(parseFloat(input.value))))];
   return parseFloat(input.value);
@@ -129,6 +132,16 @@ for (const name of ['A', 'B']) {
     if (dur) { const t = (scrub.value / 1000) * dur; bus.send('seek', { deck: name, time: t }); preview.seek(name, t); }
   });
 }
+// The generator row of a deck: shown while the deck holds a generator, its sliders named after
+// what they do in that generator, the text box only for the one that draws text.
+function showGenControls(name) {
+  const el = deckEls[name], clip = state.decks[name].clip;
+  const g = clip && clip.gen ? GEN_BY_ID[clip.gen] : null;
+  $('.gen-params', el).classList.toggle('hidden', !g);
+  if (!g) return;
+  $$('.gen-label', el).forEach((s, i) => { s.textContent = g.params[i]; });
+  $('.gen-text', el).classList.toggle('hidden', g.uses !== 'text');
+}
 function command(cmd, name) {
   bus.send(cmd, { deck: name });
   if (cmd === 'play') preview.play(name); else if (cmd === 'pause') preview.pause(name); else if (cmd === 'restart') preview.restart(name);
@@ -157,6 +170,25 @@ $('#master-reset').addEventListener('click', () => {
   }
 });
 
+// ---------- image overlay ----------
+// The picture itself travels as a File over the bus and is kept in IndexedDB, so it survives a
+// reload of this page; its placement is ordinary master state (the ov… keys).
+state.overlay = null;       // { file, name } | null
+function setOverlay(source, store = true) {
+  state.overlay = source;
+  $('#ov-name').textContent = source ? source.name : 'no image';
+  preview.setOverlay(source);
+  bus.send('overlay', { source });
+  if (store) kvSet('overlay', source).catch(() => {});
+}
+$('#ov-pick').addEventListener('click', () => $('#ov-file').click());
+$('#ov-file').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (file) setOverlay({ file, name: file.name });
+  e.target.value = '';
+});
+$('#ov-clear').addEventListener('click', () => setOverlay(null));
+
 // Push the whole state object into the inputs (after a restore).
 function syncInputs() {
   for (const name of ['A', 'B']) {
@@ -165,6 +197,7 @@ function syncInputs() {
     const d = state.decks[name];
     $('.title', deckEls[name]).textContent = d.clip ? d.clip.title : 'empty';
     setPaneThumb(name, d.clip);
+    showGenControls(name);
   }
   for (const input of $$('[data-master]')) setInput(input, state.master[input.dataset.master]);
   const { scale, ...rest } = state.master; preview.setMaster(rest);
@@ -226,7 +259,7 @@ function updateDeckStatus(name, s) {
   const el = deckEls[name], d = state.decks[name];
   d.duration = s.duration || 0;
   // frozen = not paused, ready, but the time has not moved for ~3 s (a stick clip whose data vanished)
-  if (!s.paused && s.ready && d.lastTime === s.time && s.time > 0) d.frozenSince = d.frozenSince || Date.now(); else d.frozenSince = 0;
+  if (!s.paused && s.ready && d.lastTime === s.time && s.time > 0 && !(d.clip && d.clip.gen)) d.frozenSince = d.frozenSince || Date.now(); else d.frozenSince = 0;
   const stuckNow = !!(d.frozenSince && Date.now() - d.frozenSince > 3000);
   if (stuckNow && !d.stuck) log.warn('clip.stall', `deck ${name} frozen at ${s.time.toFixed(1)} s`, { title: d.clip && d.clip.title, via: d.source && d.source.via });
   if (s.error && s.error !== d.lastError) log.error('clip.error', `deck ${name}: ${s.error}`, { title: d.clip && d.clip.title });
@@ -247,6 +280,7 @@ function updateDeckStatus(name, s) {
       d.clip = d.prevClip; d.source = d.prevSource; d.pendingClip = null;
       $('.title', deckEls[name]).textContent = d.clip ? d.clip.title : 'empty';
       setPaneThumb(name, d.clip);
+      showGenControls(name);
       badge.textContent = `could not load "${failed.title}": ${s.error}`; badge.className = 'badge error';
       log.error('clip.loadfail', `deck ${name}: "${failed.title}" ${s.error}`, { url: failed.url, kind: d.source && d.source.kind, via: d.source && d.source.via });
       persist();
@@ -273,7 +307,8 @@ function updateDeckStatus(name, s) {
 // deck is on WebGL, and the transport of an empty deck. Parameters of an empty deck stay
 // live so a deck can be preset before a clip is loaded. Everything the CSS path has
 // (blur included) also exists in the shader, so nothing is disabled on a WebGL deck.
-const GL_ONLY = new Set(['pixelate', 'rgbShift', 'posterize', 'threshold', 'mirror', 'kaleido']);
+const GL_ONLY = new Set(['pixelate', 'rgbShift', 'posterize', 'threshold', 'mirror', 'kaleido', 'palette', 'edges', 'halftone', 'dither', 'ledWall', 'ripple', 'spiral', 'glitch',
+  'ascii', 'riso', 'warp', 'radialBlur', 'stretch', 'stretchGrid', 'interference', 'grain', 'lumalines', 'scanMod', 'fisheye']);
 const GL_MASTER = new Set(['feedback', 'fbZoom', 'fbRotate', 'fbHue', 'fbKey', 'fbX', 'fbY', 'fbTilt', 'fbBlur', 'vhs', 'vhsTrack', 'crt', 'crtCurve', 'tvSignal', 'tvVHold', 'tvHHold', 'tvGhost', 'tvDelay', 'tvHum', 'tvBright']);
 function setAvailable(input, on, why) {
   input.disabled = !on;
@@ -289,6 +324,7 @@ function updateAvailability(name, mode, anyGl, anyClip) {
     if (GL_ONLY.has(k)) setAvailable(input, !loaded || mode === 'gl', 'Needs WebGL: this deck plays a stream the browser cannot read. Use a stick clip or the local server.');
   }
   for (const b of $$('[data-cmd], .scrub', el)) b.disabled = !loaded;
+  if (loaded && state.decks[name].clip.gen) $('.scrub', el).disabled = true;      // a generator has no length to scrub
   for (const input of $$('[data-master]')) if (GL_MASTER.has(input.dataset.master)) setAvailable(input, !anyClip || anyGl, 'Feedback, VHS, TV and CRT need a deck on WebGL.');
 }
 
@@ -298,6 +334,7 @@ function updateAvailability(name, mode, anyGl, anyClip) {
 // support). The preview then simply free-runs from the start.
 function syncPreview(name, s) {
   const d = state.decks[name], pv = preview.videos[name];
+  if (d.clip && d.clip.gen) { if (state.live) preview.syncGen(name, s.time || 0, s.paused); return; }
   if (!state.live || !d.clip || pv.readyState < 1 || !s.ready) return;
   if (s.paused && !pv.paused) pv.pause();
   if (!s.paused && pv.paused && !pv.ended) preview.play(name);
@@ -345,17 +382,18 @@ function sendSync() {
     const d = state.decks[name];
     decks[name] = { params: d.params, source: d.source, meta: d.clip ? clipMeta(d.clip) : null, playing: d.playing, time: d.lastTime || preview.videos[name].currentTime || 0 };
   }
-  bus.send('sync', { decks, master: state.master });
+  bus.send('sync', { decks, master: state.master, overlay: state.overlay });
   state.playerHasState = true;
   state.playerNeedsSync = ['A', 'B'].some((n) => state.decks[n].clip && !state.decks[n].source);
 }
-const clipMeta = (c) => ({ skips: state.skipSegments && c.segments ? c.segments.map((s) => [s.start, s.end]) : [], key: c.key, title: c.title, thumb: c.thumb && !c.thumb.startsWith('blob:') ? c.thumb : '', url: c.url || null, localPath: c.local ? c.local.path : (c.localPath || null), in: c.in || 0, out: c.out || null, source: c.source });
-const clipFromMeta = (m) => ({ key: m.key, title: m.title, thumb: m.thumb, url: m.url, localPath: m.localPath, in: m.in, out: m.out, source: m.source, youtube: m.source === 'youtube', segments: (m.skips || []).map(([start, end]) => ({ start, end })) });
+const clipMeta = (c) => ({ skips: state.skipSegments && c.segments ? c.segments.map((s) => [s.start, s.end]) : [], key: c.key, title: c.title, thumb: c.thumb && !c.thumb.startsWith('blob:') ? c.thumb : '', url: c.url || null, localPath: c.local ? c.local.path : (c.localPath || null), in: c.in || 0, out: c.out || null, source: c.source, gen: c.gen || null });
+const clipFromMeta = (m) => ({ key: m.key, title: m.title, thumb: m.thumb, url: m.url, localPath: m.localPath, in: m.in, out: m.out, source: m.source, gen: m.gen || undefined, youtube: m.source === 'youtube', segments: (m.skips || []).map(([start, end]) => ({ start, end })) });
 
 $('#open-player').addEventListener('click', () => window.open('player.html', 'vj-elato-player'));
 
 // ---------- resolving and loading clips ----------
 async function resolveSource(clip) {
+  if (clip.gen) return { kind: 'gen', gen: clip.gen };
   const local = clip.local
     || (state.library && clip.url && state.library.byUrl.get(clip.url))
     || (state.library && clip.localPath && state.library.byPath.get(clip.localPath));
@@ -384,6 +422,7 @@ async function loadClip(name, clip) {
   if (state.live) preview.load(name, source, clipMeta(clip));
   $('.title', deckEls[name]).textContent = clip.title;
   setPaneThumb(name, clip);
+  showGenControls(name);
   const badge = $('.badge', paneEls[name]);
   badge.textContent = 'loading ' + sourceLabel(source) + '…'; badge.className = 'badge';
   persist();
@@ -398,7 +437,7 @@ function stallNote(clip, source) {
   if (!mbps) return '';
   return clip.bytes * 8 / clip.duration / 1e6 * 2 > mbps ? ' · may stall' : '';
 }
-const sourceLabel = (src) => !src ? '' : src.kind === 'file' || src.via === 'stick' ? 'stick' : src.via === 'proxy' ? 'proxy' : 'stream';
+const sourceLabel = (src) => !src ? '' : src.kind === 'gen' ? 'generator' : src.kind === 'file' || src.via === 'stick' ? 'stick' : src.via === 'proxy' ? 'proxy' : 'stream';
 
 // After a restore: feed the preview stage, and the player where it needs it.
 // A clip that was reachable only as a stream (folder not yet reconnected)
@@ -429,7 +468,7 @@ function updateFolderHint() {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (e.target.matches('input[type=search], input[type=url]')) return;
+  if (e.target.matches('input[type=search], input[type=url], input[type=text]')) return;
   if (e.key === '1') toggleDeck('A');
   if (e.key === '2') toggleDeck('B');
   if (e.key === 'b' || e.key === 'B') { const cb = $('#blackout'); cb.checked = !cb.checked; setMaster('blackout', cb.checked); }
@@ -484,7 +523,7 @@ function fillFilter() {
   } else if (state.tab === 'stick') {
     add('all', 'All files');
   }
-  filter.classList.toggle('hidden', state.tab === 'url' || state.tab === 'youtube');
+  filter.classList.toggle('hidden', state.tab === 'url' || state.tab === 'youtube' || state.tab === 'gen');
 }
 search.addEventListener('input', debounce(render, 120));
 filter.addEventListener('change', render);
@@ -530,6 +569,8 @@ function currentClips() {
     }
   } else if (state.tab === 'youtube') {
     for (const e of state.ytResults) out.push({ key: 'yt:' + e.id, source: 'youtube', youtube: true, title: e.title, url: `https://www.youtube.com/watch?v=${e.id}`, thumb: e.thumb || '', duration: e.duration, sub: `${e.channel || ''}${e.duration ? ' · ' + fmtTime(e.duration) : ''}` });
+  } else if (state.tab === 'gen') {
+    for (const g of GENERATORS) if (!terms.length || match(`${g.title} ${g.sub}`.toLowerCase())) out.push(genClip(g));
   } else if (state.tab === 'stick' && state.library) {
     const lib = state.library;
     let paths = null;
@@ -543,6 +584,28 @@ function currentClips() {
     }
   }
   return out;
+}
+// Generators as library entries. Their card pictures are stills the preview's renderer draws,
+// one per turn of the event loop so the first visit to the tab does not stall on ten shaders.
+const genThumbs = {};
+const genClip = (g) => ({ key: 'gen:' + g.id, source: 'gen', gen: g.id, title: g.title, sub: g.sub, thumb: '' });
+function genThumb(id) {
+  if (!(id in genThumbs)) { try { genThumbs[id] = preview.genThumb(id); } catch (e) { console.warn('generator thumbnail failed', id, e); genThumbs[id] = ''; } }
+  return genThumbs[id];
+}
+let genThumbsQueued = false;
+function queueGenThumbs() {
+  if (genThumbsQueued) return;
+  genThumbsQueued = true;
+  const todo = GENERATORS.map((g) => g.id);
+  const next = () => {
+    const id = todo.shift();
+    if (!id) return;
+    const url = genThumb(id), img = $(`#results .card[data-key="gen:${id}"] img`);
+    if (img && url) img.src = url;
+    setTimeout(next, 30);
+  };
+  setTimeout(next, 0);
 }
 function* localDestockd() {
   const cat = state.catalogs.destockd;
@@ -568,6 +631,7 @@ function localEntry(c) {
 // Thumbnail URL for a clip: from the stick when the clip is there (works
 // offline), else the catalog's hotlinked image.
 async function thumbFor(c) {
+  if (c.gen) return genThumb(c.gen);
   const e = localEntry(c);
   if (e) { try { const u = await localThumb(state.library, e); if (u) return u; } catch { /* fall through */ } }
   return c.thumb && !c.thumb.startsWith('blob:') ? c.thumb : '';
@@ -608,10 +672,12 @@ function render() {
   const frag = document.createDocumentFragment();
   for (const c of clips) frag.appendChild(card(c));
   results.appendChild(frag);
+  if (state.tab === 'gen') queueGenThumbs();
 }
 function card(c) {
   const el = document.createElement('div');
   el.className = 'card';
+  el.dataset.key = c.key;
   const local = localEntry(c);
   const sub = c.source === 'spelunkr'
     ? `${c.channelName}${c.year ? ' · ' + c.year : ''} · ${fmtTime(c.duration)}${c.bytes ? ' · ' + fmtBytes(c.bytes) : ''}`
@@ -619,7 +685,7 @@ function card(c) {
     : c.source === 'mia' ? `${fmtTime(c.duration)} · ${c.colour ? 'colour' : 'b/w'}${c.aspect ? ' · ' + c.aspect : ''}${c.score ? ' · match ' + Math.round(c.score * 100) + '%' : ''}` : (c.sub || '');
   const starred = local && inOwn('Starred', local.path);
   el.innerHTML = `
-    <img loading="lazy" src="${local ? '' : (c.thumb || '')}" alt="">
+    <img loading="lazy" src="${local ? '' : ((c.gen ? genThumbs[c.gen] : c.thumb) || '')}" alt="">
     ${local ? '<span class="local">stick</span>' : ''}
     <div class="actions">${local ? `<button class="star${starred ? ' on' : ''}" title="Starred collection on the stick">★</button>` : ''}<button data-deck="A">A</button><button data-deck="B">B</button></div>
     <div class="meta"><div class="name">${escapeHtml(c.source === 'destockd' ? c.film : c.title)}</div><div class="sub">${escapeHtml(sub)}</div></div>`;
@@ -976,6 +1042,7 @@ function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&am
   $('#show-enabled').checked = state.show.enabled; $('#show-idle').value = state.show.idle; $('#show-preview').checked = state.show.preview;
   $('#skip-segments').checked = state.skipSegments;
   syncInputs();
+  kvGet('overlay').then((src) => { if (src && src.file) setOverlay(src, false); }).catch(() => {});
   bus.send('state?');
   setTimeout(async () => {
     await restoreLibrary();

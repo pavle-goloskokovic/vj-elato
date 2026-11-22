@@ -17,7 +17,11 @@ Scenarios:
   plays on WebGL, a Destockd stream falls back to the CSS layer, deck and master effects
   change the picture, the TV set slides, rolls and breaks up a paused picture, the VHS
   tape, the CRT tube and the feedback blur, vanishing point and key each change it, and a
-  reset leaves it untouched, strobe blinks, the crossfader is linear, reset fx resets.
+  reset leaves it untouched, each of the 19 deck looks (palette, edges, halftone … fisheye)
+  changes it and leaves it untouched at zero, LED wall and halftone layer, an overlay image
+  shows on the output and in the preview, moves, bounces and clears, strobe blinks, the crossfader is linear, reset fx resets,
+  the generators tab lists ten generators with thumbnails, each draws a moving picture, a paused one holds still and
+  answers its slider and a deck look, and the text generator draws what is typed.
 - **reload** – reloading the controller restores clips and settings, leaves the player
   playing and resumes the previews in sync; reloading the player resumes where it was.
 - **crop** – the 4:3 bars button trims the pillarbox so cover differs from contain.
