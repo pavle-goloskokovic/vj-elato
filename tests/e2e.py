@@ -141,7 +141,7 @@ async def smoke(ctx, check, logs):
     looks = {}
     for k, v in (("palette", "2"), ("edges", "1"), ("halftone", "0.6"), ("dither", "0.6"), ("ledWall", "0.6"), ("ripple", "1"), ("spiral", "0.6"), ("glitch", "1"),
                  ("ascii", "0.3"), ("riso", "0.5"), ("warp", "0.8"), ("radialBlur", "0.8"), ("stretch", "0.45"), ("stretchGrid", "1"),
-                 ("interference", "0.8"), ("grain", "1"), ("lumalines", "0.5"), ("scanMod", "0.5"), ("fisheye", "0.8")):
+                 ("interference", "0.8"), ("grain", "1"), ("lumalines", "0.5"), ("scanMod", "0.5"), ("fisheye", "0.8"), ("photocopy", "0.6")):
         await ctrl.evaluate(SET_PARAM, ["A", k, v]); await ctrl.wait_for_timeout(500)
         looks[k] = round(diff(plain, gray(await player.screenshot())), 2)
         await ctrl.evaluate(SET_PARAM, ["A", k, "0"])
@@ -153,7 +153,7 @@ async def smoke(ctx, check, logs):
     check("LED wall and halftone layer instead of one replacing the other", min(diff(grids[2], grids[0]), diff(grids[2], grids[1])) > 1, [diff(grids[2], grids[0]), diff(grids[2], grids[1])])
     await ctrl.evaluate(SET_PARAM, ["A", "ledWall", "0"]); await ctrl.evaluate(SET_PARAM, ["A", "halftone", "0"])
     await ctrl.wait_for_timeout(500)
-    check("each of the 19 deck looks changes the picture", min(looks.values()) > 1, looks)
+    check("each of the 20 deck looks changes the picture", min(looks.values()) > 1, looks)
     check("and leave it untouched when back at zero", diff(plain, gray(await player.screenshot())) < 0.3, diff(plain, gray(await player.screenshot())))
     # image overlay: a white square over the output, moved, bouncing, then cleared
     from PIL import Image
@@ -196,14 +196,14 @@ async def smoke(ctx, check, logs):
     await ctrl.evaluate(SET_MASTER, ["crossfade", "0"])
     await ctrl.click(".tabs button[data-tab=gen]")
     try:
-        await ctrl.wait_for_function("document.querySelectorAll('#results .card').length === 10 && [...document.querySelectorAll('#results .card img')].every(i => i.src.startsWith('data:'))", timeout=20000)
+        await ctrl.wait_for_function("document.querySelectorAll('#results .card').length === 11 && [...document.querySelectorAll('#results .card img')].every(i => i.src.startsWith('data:'))", timeout=20000)
         listed = True
     except Exception:
         listed = False
-    check("generators tab lists ten generators with drawn thumbnails", listed, await ctrl.evaluate("[...document.querySelectorAll('#results .card img')].map(i => i.src.slice(0, 5))"))
+    check("generators tab lists eleven generators with drawn thumbnails", listed, await ctrl.evaluate("[...document.querySelectorAll('#results .card img')].map(i => i.src.slice(0, 5))"))
     gens = {}
     await ctrl.select_option("#target-deck", "A")       # the A / B buttons only show on hover: click the card itself
-    for g in ("tunnel", "starfield", "grid", "bars", "nebula", "fractalgrid", "moire", "logo", "text", "plasma"):
+    for g in ("tunnel", "starfield", "grid", "bars", "nebula", "fractalgrid", "moire", "rug", "logo", "text", "plasma"):
         await ctrl.click(f"#results .card[data-key='gen:{g}'] img"); await ctrl.wait_for_timeout(700)
         a = gray(await player.screenshot()); await ctrl.wait_for_timeout(800); b = gray(await player.screenshot())
         gens[g] = [max(a), diff(a, b)]

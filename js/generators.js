@@ -157,6 +157,43 @@ vec3 gen(vec2 uv, vec2 p) {
 }`,
   },
   {
+    // After a hotel carpet: strips of square tiles, each tile four triangles in greys, some tiles
+    // twice the size, on a speckled blue-grey ground that shows between the strips and through
+    // holes in them, with black lines down some of the strip edges.
+    id: 'rug', title: 'Rug', sub: 'strips of triangle tiles on a speckled ground, sliding and reshuffling', params: ['scale', 'shuffle', 'colour'],
+    body: `// both coordinates vary with the column: with one held constant this hash clumps for small whole numbers
+bool gapRaw(float i) { return hash(vec2(i + 0.37, i * 0.61 + 7.31)) < 0.3; }
+bool gapCol(float i) { return gapRaw(i) && !gapRaw(i - 1.0); }           // ground strips are one column wide, never two side by side
+vec3 gen(vec2 uv, vec2 p) {
+  vec2 q = p * mix(3.0, 11.0, a);                    // one unit is a small tile
+  q.y += time * 0.3;
+  // the ground: blotches of two blue-greys, a few light flecks
+  vec2 g = q * 11.0;
+  float n = noise(g) * 0.65 + noise(g * 2.7 + 9.0) * 0.35;
+  vec3 col = mix(hsv(fract(0.57 + c - 0.5), 0.2, 0.56), hsv(fract(0.56 + c - 0.5), 0.09, 0.8), smoothstep(0.46, 0.54, n));
+  col = mix(col, hsv(fract(0.58 + c - 0.5), 0.26, 0.42), smoothstep(0.3, 0.26, n));
+  float i = floor(q.x);
+  vec2 blk = floor(q / 2.0);
+  bool hole = hash(vec2(blk.x, floor(blk.y / 2.0)) + 3.3) < 0.1;      // a patch of ground inside a strip, 2 by 4 tiles
+  bool wide = !gapCol(blk.x * 2.0) && !gapCol(blk.x * 2.0 + 1.0);
+  if (!hole && !gapCol(i)) {
+    bool big = wide && hash(blk + 11.0) < 0.3;                         // a tile of twice the size
+    vec2 id = big ? blk * 2.0 + 0.5 : floor(q), f = big ? fract(q / 2.0) : fract(q);
+    float tri_ = f.y > f.x ? (f.y > 1.0 - f.x ? 0.0 : 1.0) : (f.y > 1.0 - f.x ? 2.0 : 3.0);
+    float tick = floor(time * b * b * 2.0 + hash(id + 1.9) * 8.0);     // each tile redraws its shades at its own moment
+    float h = hash(id * 1.3 + vec2(tri_ * 17.0 + 0.7, tick * 3.7));
+    col = h < 0.07 ? (big ? vec3(0.4, 0.38, 0.37) : vec3(0.07))
+        : h < 0.32 ? vec3(0.95, 0.94, 0.92)
+        : h < 0.56 ? vec3(0.78, 0.77, 0.76)
+        : h < 0.8 ? vec3(0.6, 0.59, 0.58) : vec3(0.52, 0.47, 0.44);
+  }
+  // a black line down some of the joints between columns, ground or tiles alike
+  float j = floor(q.x + 0.5);
+  if (hash(vec2(j + 0.81, j * 0.43 + 23.17)) < 0.3 &&!(gapCol(j) && gapCol(j - 1.0))) col = mix(col, vec3(0.05), smoothstep(0.07, 0.04, abs(q.x - j)));
+  return col;
+}`,
+  },
+  {
     id: 'logo', title: 'Bouncing logo', sub: 'the overlay image (or a ring) bouncing off the edges, a new colour at every hit', params: ['size', 'tint', 'colour'], uses: 'overlay',
     body: `vec3 gen(vec2 uv, vec2 p) {
   float s = mix(0.08, 0.5, a);

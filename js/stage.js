@@ -26,7 +26,7 @@ export const DEFAULT_PARAMS = {
   zoom: 1, rotate: 0, pixelate: 0, rgbShift: 0, posterize: 0, threshold: 0, mirror: 0, kaleido: 0,
   cropX: 0, cropY: 0,
   palette: 0, edges: 0, halftone: 0, dither: 0, ledWall: 0, ripple: 0, spiral: 0, glitch: 0,
-  ascii: 0, riso: 0, warp: 0, radialBlur: 0, stretch: 0, stretchGrid: 0, interference: 0, grain: 0, lumalines: 0, scanMod: 0, fisheye: 0,
+  ascii: 0, riso: 0, warp: 0, radialBlur: 0, stretch: 0, stretchGrid: 0, interference: 0, grain: 0, lumalines: 0, scanMod: 0, fisheye: 0, photocopy: 0,
   ...GEN_DEFAULTS,     // a generator's three sliders and its text: genA, genB, genC, genText
 };
 export const DEFAULT_MASTER = {
@@ -170,9 +170,21 @@ export class Stage {
     }
     this._release(this.videos[name]);
     d.meta = meta; d.error = null; d.source = source; d.in = 0; d.out = null; d.skips = []; d.mode = 'gl';
-    d.gen = { id: source.gen, t: (meta && meta.time) || 0, paused: !this.enabled || !!(meta && meta.paused) };
+    d.gen = { id: source.gen, t: (meta && meta.time) || 0, at: Date.now(), paused: !this.enabled || !!(meta && meta.paused) };
     this.applyCss(name);
     if (this.onEvent) this.onEvent({ deck: name, type: 'loaded', meta });
+  }
+  // A generator's clock runs on the wall clock, not on drawn frames: `t` is its time at the moment
+  // `at`, and it has moved on at the deck's speed since. A player in a hidden tab draws nothing,
+  // but its generator still is where it should be, and the preview following it never jumps back.
+  _genTime(name) {
+    const d = this.decks[name], g = d.gen;
+    return g.paused ? g.t : g.t + (Date.now() - g.at) / 1000 * (d.params.speed || 1);
+  }
+  _genSet(name, t, paused) {
+    const g = this.decks[name].gen;
+    g.t = Math.max(0, t); g.at = Date.now();
+    if (paused !== undefined) g.paused = paused;
   }
   // What the renderer needs to draw this frame of a deck's generator.
   _genFrame(name) {
@@ -185,7 +197,7 @@ export class Stage {
       if (d.gen.text !== text) { d.gen.text = text; d.gen.canvas = drawText(d.gen.cv || (d.gen.cv = document.createElement('canvas')), text); }
       if (d.gen.canvas) image = { el: d.gen.canvas, w: d.gen.canvas.width, h: d.gen.canvas.height, stamp: 'text:' + text };
     }
-    return { id: d.gen.id, time: d.gen.t, a: p.genA, b: p.genB, c: p.genC, image };
+    return { id: d.gen.id, time: this._genTime(name), a: p.genA, b: p.genB, c: p.genC, image };
   }
   // A still of a generator for its library card, as a data URL ('' without WebGL).
   genThumb(id, w = 160, h = 90) {
@@ -203,8 +215,9 @@ export class Stage {
   syncGen(name, time, paused) {
     const g = this.decks[name].gen;
     if (!g) return;
-    g.paused = !!paused || !this.enabled;
-    if (Math.abs(g.t - time) > 0.3) g.t = time;
+    const now = this._genTime(name), stop = !!paused || !this.enabled;
+    if (Math.abs(now - time) > 0.3) this._genSet(name, time, stop);
+    else if (stop !== g.paused) this._genSet(name, now, stop);
   }
 
   _commit(name) {
@@ -228,13 +241,16 @@ export class Stage {
 
   play(name) {
     const g = this.decks[name].gen;
-    if (g) { g.paused = false; return; }
+    if (g) { if (g.paused) this._genSet(name, g.t, false); return; }
     const p = this.videos[name].play(); if (p) p.catch(() => {});
   }
-  pause(name) { const g = this.decks[name].gen; if (g) g.paused = true; else this.videos[name].pause(); }
-  restart(name) { const g = this.decks[name].gen; if (g) g.t = 0; else this.videos[name].currentTime = this.decks[name].in; this.play(name); }
-  seek(name, t) { const g = this.decks[name].gen; if (g) g.t = Math.max(0, t); else this.videos[name].currentTime = t; }
-  setParams(name, params) { Object.assign(this.decks[name].params, params); this.applyCss('A'); this.applyCss('B'); }
+  pause(name) { if (this.decks[name].gen) this._genSet(name, this._genTime(name), true); else this.videos[name].pause(); }
+  restart(name) { if (this.decks[name].gen) this._genSet(name, 0, false); else { this.videos[name].currentTime = this.decks[name].in; this.play(name); } }
+  seek(name, t) { if (this.decks[name].gen) this._genSet(name, t); else this.videos[name].currentTime = t; }
+  setParams(name, params) {
+    if ('speed' in params && this.decks[name].gen) this._genSet(name, this._genTime(name));   // the time so far was at the old speed
+    Object.assign(this.decks[name].params, params); this.applyCss('A'); this.applyCss('B');
+  }
   setMaster(params) {
     const scaleChanged = 'scale' in params && params.scale !== this.master.scale;
     Object.assign(this.master, params);
@@ -322,13 +338,16 @@ export class Stage {
     if (!this.renderer) return;
     const decks = {};
     let anyGl = false;
-    const dt = Math.min(1, Math.max(0, (now - (this._last || now)) / 1000));
-    this._last = now;
+    // A deck the crossfader (or its opacity) has faded out entirely, and that no pane shows on its
+    // own, is not drawn at all: no video upload, no generator, no effect pass. On the player that
+    // is half the work whenever the fader rests at one end.
+    const mixW = crossfadeWeights(this.master.crossfade, this.decks.B.params.blend);
     for (const name of ['A', 'B']) {
       const d = this.decks[name], v = this.videos[name];
       let active = false, gen = null;
-      if (d.gen) {                                           // a generator: its own clock, at the deck's speed
-        if (!d.gen.paused) d.gen.t += dt * (d.params.speed || 1);
+      const seen = !!this._layout.panes[name] || mixW[name === 'A' ? 0 : 1] * (d.params.opacity ?? 1) > 0;
+      if (!seen) { /* skipped */ }
+      else if (d.gen) {                                      // a generator: its own clock, at the deck's speed
         gen = this._genFrame(name); active = true;
       } else if (d.mode === 'gl' && v.readyState >= 2) {
         if (this.renderer.upload(name, v)) active = true;
@@ -348,7 +367,7 @@ export class Stage {
     for (const name of ['A', 'B']) {
       const d = this.decks[name], v = this.videos[name];
       decks[name] = {
-        time: d.gen ? d.gen.t : v.currentTime, duration: d.gen || !isFinite(v.duration) ? null : v.duration,
+        time: d.gen ? this._genTime(name) : v.currentTime, duration: d.gen || !isFinite(v.duration) ? null : v.duration,
         paused: d.gen ? d.gen.paused : v.paused, ready: d.gen ? true : v.readyState >= 2, error: d.error, mode: d.mode,
         loading: d.pending ? (d.pending.meta && d.pending.meta.key) || true : null,
         meta: d.meta, params: d.params,

@@ -31,22 +31,21 @@ precision highp float;
 in vec2 vUv; out vec4 o;
 uniform sampler2D tex;
 uniform vec2 texSize, outSize;
-uniform float fitCover, zoom, rotate, hue, saturate, contrast, brightness, invert;
-uniform float pixelate, rgbShift, posterize, threshold;
+uniform float fitCover, zoom, saturate, contrast, brightness, time;
 uniform vec2 crop;          // fraction trimmed from each side (x) and top/bottom (y): 0.125 removes 4:3 pillarbox bars
-uniform float blur;         // radius in output pixels; a 12-tap disc, cheap and good enough for a VJ blur
-uniform int mirror, kaleido;
-uniform float halftone, dither, ledWall;   // screen grids: each sets its cell size; they layer, the picture read at the coarsest
-uniform float ripple, spiral, glitch, time;
-uniform int palette;        // brightness mapped onto colours: 1 duotone, 2 thermal, 3 cyanotype, 4 phosphor; hue turns them
-uniform int edges;          // 1 white outlines on black, 2 outlines over the picture, 3 neon
-uniform float ascii;        // a fourth screen grid: characters, denser where the picture is brighter
-uniform float riso;         // three spot inks on paper, this far out of register
-uniform float warp, stretchGrid, interference, grain, fisheye;
-uniform float radialBlur;   // above zero streaks out from the middle, below zero spins around it
-uniform float stretch;      // above zero the column at this distance from the right edge is pulled out to the edge, below zero a row to the bottom
-uniform float lumalines;    // rows of lines pushed up by brightness
-uniform float scanMod;      // scan lines that swell with brightness
+// The looks (DECK_LOOKS below) are declared by deckFrag(): as uniforms where a look is in use, as
+// constants at rest where it is not, so the compiler drops its code. What they mean:
+//   blur        radius in output pixels; a 12-tap disc, cheap and good enough for a VJ blur
+//   halftone, dither, ledWall, ascii   screen grids: each sets its cell size; they layer, the picture read at the coarsest
+//   palette     brightness mapped onto colours: 1 duotone, 2 thermal, 3 cyanotype, 4 phosphor; hue turns them
+//   edges       1 white outlines on black, 2 outlines over the picture, 3 neon
+//   riso        three spot inks on paper, this far out of register
+//   radialBlur  above zero streaks out from the middle, below zero spins around it
+//   stretch     above zero the column at this distance from the right edge is pulled out to the edge, below zero a row to the bottom
+//   lumalines   rows of lines pushed up by brightness
+//   scanMod     scan lines that swell with brightness
+//   photocopy   a photocopied print: sharpened, grain under a steep curve, warm ink on cream paper
+/*LOOKS*/
 
 // 5x5 glyphs, sparse to dense: space . : - + = o % @ #  (bit = row * 5 + column, row 0 on top)
 const int GLYPHS[10] = int[](0, 4194304, 131200, 14336, 145536, 459200, 15255086, 27070835, 15398446, 11512810);
@@ -104,7 +103,10 @@ const float PI = 3.14159265;
 // t is in picture space (0..1 over the cropped picture)
 vec4 sampleTex(vec2 t) {
   if (t.x < 0.0 || t.x > 1.0 || t.y < 0.0 || t.y > 1.0) return vec4(0.0);
-  return texture(tex, crop + t * (1.0 - 2.0 * crop));
+  // textureLod, not texture: a plain texture() needs screen-space gradients, and Direct3D cannot take
+  // those inside a branch, so it runs every effect's samples on every pixel whether the effect is on
+  // or not. With an explicit level the branches stay real branches. (The video has no mip levels.)
+  return textureLod(tex, crop + t * (1.0 - 2.0 * crop), 0.0);
 }
 vec3 hueRotate(vec3 c, float a) {
   const mat3 toYIQ = mat3(0.299, 0.596, 0.211, 0.587, -0.274, -0.523, 0.114, -0.322, 0.312);
@@ -192,7 +194,7 @@ void main() {
   }
   if (warp > 0.0) d += (noise2(d * 2.5 + vec2(time * 0.25, -time * 0.18)) - 0.5) * 0.45 * warp;
   if (kaleido >= 2) {
-    float seg = 2.0 * PI / float(kaleido);
+    float seg = 2.0 * PI / float(max(kaleido, 1));
     float a = atan(d.y, d.x), r = length(d);
     a = mod(a, seg); a = abs(a - seg * 0.5);
     d = r * vec2(cos(a), sin(a));
@@ -263,6 +265,24 @@ void main() {
   col = (col - 0.5) * contrast + 0.5;
   float l = luma(col);
   col = mix(vec3(l), col, saturate);
+  if (photocopy > 0.0) {
+    // Sharpen first (an unsharp mask over a small cross), then add grain and only then run the
+    // steep curve: the grain decides which side of the curve a mid-tone pixel lands on, so
+    // mid-tones break into speckle as on a copier, while blacks and whites stay solid.
+    vec2 e = 1.5 * k720 / outSize * s;
+    float nb = 0.25 * (luma(sampleTex(t + vec2(e.x, 0.0)).rgb) + luma(sampleTex(t - vec2(e.x, 0.0)).rgb)
+                     + luma(sampleTex(t + vec2(0.0, e.y)).rgb) + luma(sampleTex(t - vec2(0.0, e.y)).rgb));
+    nb = (nb * brightness - 0.5) * contrast + 0.5;
+    float y = l + (l - nb) * 1.5;
+    float tick = floor(time * 12.0) * 5.17;               // the grain is redrawn 12 times a second
+    float fine = hash(scr + tick) - 0.5, clump = hash(floor(scr / max(2.0, floor(2.0 * k720 + 0.5))) + tick + 41.0) - 0.5;
+    y += (fine * 0.7 + clump * 0.3) * mix(0.03, 0.5, photocopy * photocopy);   // little grain in the lower half, then it takes over
+    float w = mix(0.32, 0.06, photocopy);                  // half-width of the curve: narrower is harder
+    float paper = smoothstep(0.45 - w, 0.45 + w, y);
+    vec3 print = mix(vec3(0.02, 0.016, 0.014), vec3(0.95, 0.92, 0.89), paper);
+    print += fine * 0.12 * (1.0 - 0.6 * paper);            // toner dust, stronger in the blacks
+    col = mix(col, print, smoothstep(0.0, 0.12, photocopy));
+  }
   if (edges > 0) {                  // brightness gradient over a 3-pixel cross
     vec2 e = 1.5 / outSize * s;
     vec2 g = vec2(luma(sampleTex(t + vec2(e.x, 0.0)).rgb) - luma(sampleTex(t - vec2(e.x, 0.0)).rgb),
@@ -274,7 +294,7 @@ void main() {
   }
   if (palette > 0) col = paletteMap(luma(col));
   if (hue != 0.0) col = hueRotate(col, hue);
-  if (posterize >= 2.0) col = floor(col * posterize + 0.5) / posterize;
+  if (posterize >= 2.0) col = floor(col * posterize + 0.5) / max(posterize, 1.0);
   if (threshold > 0.0) col = vec3(step(threshold, luma(col)));
   col = clamp(col, 0.0, 1.0);
   if (lumalines > 0.0) col = lineMask * mix(col, col / max(max(col.r, max(col.g, col.b)), 0.02), 0.6);
@@ -313,6 +333,33 @@ void main() {
   col = mix(col, 1.0 - col, invert);
   o = vec4(clamp(col, 0.0, 1.0), 1.0);
 }`;
+
+// The deck shader is compiled in variants. Direct3D evaluates much of a look's code even while its
+// slider rests at zero, so a deck with nothing on paid for all of them. A variant declares the looks
+// that are in use as uniforms and the others as constants at rest, which lets the compiler drop
+// their code. The renderer keeps one variant per set of looks in use, compiles a new set in the
+// background and draws with the full shader until it is ready.
+const DECK_LOOKS = {
+  float: ['rotate', 'hue', 'invert', 'pixelate', 'rgbShift', 'posterize', 'threshold', 'blur', 'halftone', 'dither', 'ledWall', 'ripple',
+    'spiral', 'glitch', 'ascii', 'riso', 'warp', 'stretchGrid', 'interference', 'grain', 'fisheye', 'radialBlur', 'stretch', 'lumalines',
+    'scanMod', 'photocopy'],
+  int: ['mirror', 'kaleido', 'palette', 'edges'],
+};
+const LOOK_NAMES = [...DECK_LOOKS.float, ...DECK_LOOKS.int];
+// inUse: a Set of look names, or null for the full shader
+function deckFrag(inUse) {
+  const decl = (type, zero) => DECK_LOOKS[type].map((n) => (!inUse || inUse.has(n) ? `uniform ${type} ${n};` : `const ${type} ${n} = ${zero};`)).join('\n');
+  return DECK_FRAG.replace('/*LOOKS*/', decl('float', '0.0') + '\n' + decl('int', '0'));
+}
+// The looks a deck's params have off rest, as a key: "blur,hue,kaleido"
+function lookKey(params) {
+  let key = '';
+  for (const n of LOOK_NAMES) {
+    const v = params[n] || 0;
+    if (n === 'posterize' || n === 'kaleido' ? v >= 2 : v !== 0) key += (key ? ',' : '') + n;
+  }
+  return key;
+}
 
 const MIX_FRAG = `#version 300 es
 precision highp float;
@@ -674,12 +721,36 @@ export function createRenderer(canvas) {
     gl.attachShader(p, compile(gl.FRAGMENT_SHADER, frag));
     gl.linkProgram(p);
     if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+    return { p, u: uniformsOf(p) };
+  }
+  function uniformsOf(p) {
     const uniforms = {};
     const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
     for (let i = 0; i < n; i++) { const u = gl.getActiveUniform(p, i); uniforms[u.name] = gl.getUniformLocation(p, u.name); }
-    return { p, u: uniforms };
+    return uniforms;
   }
-  const deckProg = program(DECK_FRAG), mixProg = program(MIX_FRAG), outProg = program(OUT_FRAG), tvProg = program(TV_FRAG), vhsProg = program(VHS_FRAG);
+  // The same without waiting: poll() answers undefined while the driver is still compiling, then
+  // the program, or null if it failed. Without the extension the first poll blocks until it is done.
+  const parallel = gl.getExtension('KHR_parallel_shader_compile');
+  function programLater(frag) {
+    const p = gl.createProgram(), shaders = [[gl.VERTEX_SHADER, VERT], [gl.FRAGMENT_SHADER, frag]].map(([type, src]) => {
+      const sh = gl.createShader(type);
+      gl.shaderSource(sh, src); gl.compileShader(sh); gl.attachShader(p, sh);
+      return sh;
+    });
+    gl.linkProgram(p);
+    return {
+      poll() {
+        if (parallel && !gl.getProgramParameter(p, parallel.COMPLETION_STATUS_KHR)) return undefined;
+        if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
+          console.error('deck shader variant failed', gl.getProgramInfoLog(p), shaders.map((s) => gl.getShaderInfoLog(s)).join('\n'));
+          return null;
+        }
+        return { p, u: uniformsOf(p) };
+      },
+    };
+  }
+  const deckProg = program(deckFrag(null)), mixProg = program(MIX_FRAG), outProg = program(OUT_FRAG), tvProg = program(TV_FRAG), vhsProg = program(VHS_FRAG);
   const vao = gl.createVertexArray();
 
   function texture() {
@@ -797,6 +868,36 @@ export function createRenderer(canvas) {
     return true;
   }
 
+  // Deck shader variants (see DECK_LOOKS): key -> { prog, job, failed, used }. One compiles at a
+  // time; the least recently used are dropped past 48.
+  const variants = new Map();
+  let compiling = null, useTick = 0;
+  function pollVariant() {
+    if (!compiling) return;
+    const r = compiling.job.poll();
+    if (r === undefined) return;
+    compiling.job = null;
+    if (r) compiling.prog = r; else compiling.failed = true;
+    compiling = null;
+  }
+  function deckProgram(params) {
+    const key = lookKey(params);
+    let v = variants.get(key);
+    if (!v) {
+      v = { prog: null, job: null, failed: false, used: 0 };
+      variants.set(key, v);
+      if (variants.size > 48) {
+        let oldest = null;
+        for (const [k, o] of variants) if (o !== compiling && o !== v && (!oldest || o.used < variants.get(oldest).used)) oldest = k;
+        if (oldest !== null) { const o = variants.get(oldest); if (o.prog) gl.deleteProgram(o.prog.p); variants.delete(oldest); }
+      }
+    }
+    v.used = ++useTick;
+    if (!v.prog && !v.failed && !compiling) { v.job = programLater(deckFrag(new Set(key ? key.split(',') : []))); compiling = v; }
+    return v.prog || deckProg;
+  }
+  deckProgram({});              // the variant for a deck with nothing on, wanted from the first frame
+
   function drawDeck(name, params, has, time, gen) {
     if (has && gen) has = drawGen(genFbo[name], name, gen);
     const fbo = deckFbo[name];
@@ -804,8 +905,9 @@ export function createRenderer(canvas) {
     gl.viewport(0, 0, W, H);
     gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT);
     if (!has) return;
-    gl.useProgram(deckProg.p);
-    const u = deckProg.u;
+    const prog = deckProgram(params);
+    gl.useProgram(prog.p);
+    const u = prog.u;
     gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, gen ? genFbo[name].t : videoTex[name]); gl.uniform1i(u.tex, 0);
     if (gen) gl.uniform2f(u.texSize, W, H); else gl.uniform2f(u.texSize, videoSize[name][0], videoSize[name][1]);
     gl.uniform2f(u.outSize, W, H);
@@ -833,7 +935,7 @@ export function createRenderer(canvas) {
     gl.uniform1f(u.glitch, params.glitch || 0);
     gl.uniform1i(u.palette, params.palette || 0);
     gl.uniform1i(u.edges, params.edges || 0);
-    for (const k of ['ascii', 'riso', 'warp', 'stretchGrid', 'interference', 'grain', 'radialBlur', 'stretch', 'lumalines', 'scanMod', 'fisheye']) gl.uniform1f(u[k], params[k] || 0);
+    for (const k of ['ascii', 'riso', 'warp', 'stretchGrid', 'interference', 'grain', 'radialBlur', 'stretch', 'lumalines', 'scanMod', 'fisheye', 'photocopy']) gl.uniform1f(u[k], params[k] || 0);
     gl.uniform1f(u.time, time % 3600);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
@@ -894,6 +996,7 @@ export function createRenderer(canvas) {
   // panes: { out: [x, y, w, h], A?: [...], B?: [...] } in canvas pixels, y from the top
   function render(decks, master, time, panes) {
     if (!deckFbo) return;
+    pollVariant();
     gl.bindVertexArray(vao);
     gl.disable(gl.BLEND);
     gl.disable(gl.SCISSOR_TEST);
@@ -958,6 +1061,7 @@ export function createRenderer(canvas) {
   const dbg = gl.getExtension('WEBGL_debug_renderer_info');
   return {
     gl, resize, setCanvasSize, upload, render, clear, genThumb,
+    variants: () => ({ total: variants.size, ready: [...variants.values()].filter((v) => v.prog).length, failed: [...variants.values()].filter((v) => v.failed).length }),
     info: dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : 'webgl2',
   };
 }

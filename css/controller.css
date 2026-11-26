@@ -19,7 +19,12 @@ button.small { padding: 2px 8px; font-size: 11px; }
 .spacer { flex: 1; }
 .hidden { display: none !important; }
 
-header { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--line); }
+/* nothing in the header breaks inside itself: when the row is full, whole items move to the next one */
+header > * { flex: none; white-space: nowrap; }
+header > .spacer { flex: 1; }
+header > #gpu-status, header > #folder-status { flex: 0 1 auto; min-width: 0; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; }
+header .proxy > * { flex: none; white-space: nowrap; }
 .brand { font-weight: 700; letter-spacing: .04em; color: var(--accent); margin-right: 6px; }
 .pill { padding: 2px 10px; border-radius: 999px; font-size: 12px; border: 1px solid var(--line); }
 .pill.on { color: var(--ok); border-color: var(--ok); }
