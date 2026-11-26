@@ -11,7 +11,7 @@ Needs: Python 3.11+, `pip install playwright pillow`, and Google Chrome
 installed. Playwright's bundled Chromium has no H.264 decoder, so the tests
 use channel="chrome". The GPU flags keep Chrome off software rendering.
 
-The clip: by default the first .mp4 found on a stick that carries
+The clip: by default one from a stick whose vj-elato/clips folder carries
 destockd-index.json (drives D: to H: on Windows); pass --clip to use any
 H.264 mp4 of at least a few seconds.
 """
@@ -28,11 +28,11 @@ CHROME_ARGS = ["--use-angle=d3d11", "--enable-gpu", "--ignore-gpu-blocklist", "-
 # ---------- helpers ----------
 def find_clip():
     for d in "DEFGH":
-        idx = f"{d}:/destockd-index.json"
-        if os.path.exists(idx):
-            clips = json.load(open(idx, encoding="utf-8"))["clips"].values()
+        lib = f"{d}:/vj-elato/clips/"
+        if os.path.exists(lib + "destockd-index.json"):
+            clips = json.load(open(lib + "destockd-index.json", encoding="utf-8"))["clips"].values()
             best = min(clips, key=lambda r: abs((r["bytes"] or 0) - 12_000_000))
-            return f"{d}:/" + best["path"]
+            return lib + best["path"]
     return None
 
 def gray(png):
@@ -141,7 +141,7 @@ async def smoke(ctx, check, logs):
     looks = {}
     for k, v in (("palette", "2"), ("edges", "1"), ("halftone", "0.6"), ("dither", "0.6"), ("ledWall", "0.6"), ("ripple", "1"), ("spiral", "0.6"), ("glitch", "1"),
                  ("ascii", "0.3"), ("riso", "0.5"), ("warp", "0.8"), ("radialBlur", "0.8"), ("stretch", "0.45"), ("stretchGrid", "1"),
-                 ("interference", "0.8"), ("grain", "1"), ("lumalines", "0.5"), ("scanMod", "0.5"), ("fisheye", "0.8"), ("photocopy", "0.6")):
+                 ("interference", "0.8"), ("grain", "1"), ("lumalines", "0.5"), ("scanMod", "0.5"), ("fisheye", "0.8"), ("photocopy", "0.6"), ("glow", "0.8"), ("rays", "0.8")):
         await ctrl.evaluate(SET_PARAM, ["A", k, v]); await ctrl.wait_for_timeout(500)
         looks[k] = round(diff(plain, gray(await player.screenshot())), 2)
         await ctrl.evaluate(SET_PARAM, ["A", k, "0"])
@@ -153,7 +153,7 @@ async def smoke(ctx, check, logs):
     check("LED wall and halftone layer instead of one replacing the other", min(diff(grids[2], grids[0]), diff(grids[2], grids[1])) > 1, [diff(grids[2], grids[0]), diff(grids[2], grids[1])])
     await ctrl.evaluate(SET_PARAM, ["A", "ledWall", "0"]); await ctrl.evaluate(SET_PARAM, ["A", "halftone", "0"])
     await ctrl.wait_for_timeout(500)
-    check("each of the 20 deck looks changes the picture", min(looks.values()) > 1, looks)
+    check("each of the 22 deck looks changes the picture", min(looks.values()) > 1, looks)
     check("and leave it untouched when back at zero", diff(plain, gray(await player.screenshot())) < 0.3, diff(plain, gray(await player.screenshot())))
     # image overlay: a white square over the output, moved, bouncing, then cleared
     from PIL import Image
@@ -294,7 +294,7 @@ async def proxy(ctx, check, logs):
         if cached: break
         await ctrl.wait_for_timeout(1500)
     site = os.path.join(SITE, "vj-elato")
-    on_disk = cached and os.path.getsize(os.path.join(SITE, cached["file"])) == cached["bytes"]
+    on_disk = cached and os.path.getsize(os.path.join(site, "clips", cached["file"])) == cached["bytes"]
     check("fetch on play cached the whole clip on the stick", bool(cached) and on_disk, cached and f"{cached['file']} {cached['bytes']} bytes")
     info = json.load(urllib.request.urlopen(BASE + "proxy/info", timeout=10))
     check("cache usage is reported", info["cache"]["used"] > 0 and info["cache"]["count"] >= 1, f"{info['cache']['used']} bytes, {info['cache']['count']} clips")
@@ -338,7 +338,7 @@ async def stick(ctx, check, logs):
     """The server lists the stick: no folder picker, clips play as same-origin URLs, stars save on the stick."""
     import urllib.request
     idx = json.load(urllib.request.urlopen(BASE + "stick/index", timeout=10))
-    check("stick/index lists the test clip", any(f["path"] == "clips/stick-test.mp4" for f in idx["files"]), [f["path"] for f in idx["files"]][:3])
+    check("stick/index lists the test clip", any(f["path"] == "stick-test.mp4" for f in idx["files"]) and os.path.normcase(idx["root"]) == os.path.normcase(os.path.join(SITE, "vj-elato", "clips")), [f["path"] for f in idx["files"]][:3])
     player, ctrl = await open_pages(ctx, logs)
     await ctrl.wait_for_function("document.querySelector('#folder-status').textContent.includes('clips')", timeout=20000)
     status = await ctrl.evaluate("document.querySelector('#folder-status').textContent")
@@ -355,9 +355,9 @@ async def stick(ctx, check, logs):
     badge = await ctrl.evaluate("document.querySelector('.pane[data-pane=A] .badge').textContent")
     check("stick clip plays via the server URL on WebGL with the stick badge", st["decks"]["A"]["mode"] == "gl" and badge.startswith("stick"), f"mode={st['decks']['A']['mode']} badge={badge}")
     await ctrl.hover("#results .card >> nth=0"); await ctrl.click("#results .card >> nth=0 >> button.star"); await ctrl.wait_for_timeout(800)
-    path = os.path.join(SITE, "vj-elato-collections.json")
+    path = os.path.join(SITE, "vj-elato", "clips", "vj-elato-collections.json")
     saved = json.load(open(path, encoding="utf-8")) if os.path.exists(path) else {}
-    check("star writes vj-elato-collections.json on the stick through the server", "clips/stick-test.mp4" in saved.get("collections", {}).get("Starred", []), saved)
+    check("star writes vj-elato-collections.json on the stick through the server", "stick-test.mp4" in saved.get("collections", {}).get("Starred", []), saved)
 
 async def search(ctx, check, logs):
     import urllib.request
@@ -421,9 +421,8 @@ async def logging(ctx, check, logs):
     srcs = {l["src"] for l in lines}; types = {l["type"] for l in lines}
     check("session file has the server header and events from both pages", "session.start" in types and {"server", "controller", "player"} <= srcs, sorted(srcs))
     check("clip loads and the failed load are logged", "clip.load" in types and "clip.loadfail" in types and "deck.loadfail" in types, sorted(t for t in types if t.startswith(("clip", "deck"))))
-    stick_file = os.path.join(SITE, "vj-elato-logs", info["log"])
-    laptop_file = os.path.join(SITE, "vj-elato", "logs", info["log"])
-    check("the same session file exists on the laptop and on the stick", os.path.isfile(laptop_file) and os.path.isfile(stick_file) and os.path.getsize(stick_file) > 200, {"laptop": os.path.isfile(laptop_file), "stick": os.path.isfile(stick_file)})
+    log_file = os.path.join(SITE, "vj-elato", "logs", info["log"])
+    check("the session file is in the tool folder's logs and nothing is written above it", os.path.isfile(log_file) and os.path.getsize(log_file) > 200 and sorted(os.listdir(SITE)) == ["vj-elato"], {"file": os.path.isfile(log_file), "above": sorted(os.listdir(SITE))})
     check("no event is logged more than once per status tick (no chatter)", len(lines) < 60, len(lines))
 
 async def mia(ctx, check, logs):
@@ -557,13 +556,12 @@ def main():
     a = ap.parse_args()
     clip = a.clip or find_clip()
     if not clip or not os.path.exists(clip):
-        sys.exit("no test clip: plug in the stick with destockd-index.json or pass --clip <file.mp4>")
+        sys.exit("no test clip: plug in the stick (vj-elato/clips/destockd-index.json) or pass --clip <file.mp4>")
     shutil.rmtree(SITE, ignore_errors=True); os.makedirs(OUT, exist_ok=True)
     subprocess.run([sys.executable, os.path.join(ROOT, "tools", "make_portable.py"), SITE], check=True, stdout=subprocess.DEVNULL)
     site = os.path.join(SITE, "vj-elato")
     shutil.copy(clip, os.path.join(site, "test.mp4"))
-    os.makedirs(os.path.join(SITE, "clips"), exist_ok=True)
-    shutil.copy(clip, os.path.join(SITE, "clips", "stick-test.mp4"))      # seen by the server's stick scan
+    shutil.copy(clip, os.path.join(site, "clips", "stick-test.mp4"))      # seen by the server's library scan
     print(f"site: {site}\nclip: {clip}")
     names = list(SCENARIOS) if a.scenario == "all" else [a.scenario]
     failed = []

@@ -1,46 +1,64 @@
 @echo off
-rem VJ Elato launcher (Windows).
-rem Copies the tool from the stick to this user's local app data and runs the server from
-rem there, so pulling the stick cannot kill the server: only clips and the cache live on the
-rem stick, and the server reports when it is gone and recovers when it is back. Every launch
-rem re-copies, so updating the stick is the update. "serve.cmd --no-stage" runs from the
-rem stick directly and leaves nothing on the laptop.
+rem VJ Elato launcher (Windows). Works from any folder on any drive: clips, cache and logs
+rem live in this folder (clips\, clips\cache\, logs\).
+rem
+rem From a removable drive the tool is first copied to this user's local app data and run from
+rem there, so pulling the drive cannot kill the server: only the clips, the cache and a copy of
+rem the log stay on the drive, and the server reports when it is gone and recovers when it is
+rem back. Every launch re-copies, so updating the drive is the update. From a fixed disk the
+rem tool runs where it is and leaves nothing elsewhere.
+rem   serve.cmd --stage      copy to the laptop first, whatever the drive
+rem   serve.cmd --no-stage   never copy
+rem Extra options for serve.py (see its first lines) go in the VJ_ELATO_ARGS variable.
 setlocal
 set "SRC=%~dp0"
-set "STICK=%~dp0.."
+set "STAGE="
+if /i "%~1"=="--stage" set "STAGE=1"
 if /i "%~1"=="--no-stage" goto :run_here
+if not defined STAGE (
+  fsutil fsinfo drivetype %~d0 2>nul | find /i "Removable" >nul && set "STAGE=1"
+)
+if not defined STAGE goto :run_here
 
 set "RUN=%LOCALAPPDATA%\vj-elato\run"
-echo Staging the tool to %RUN% ...
-robocopy "%SRC%." "%RUN%" /MIR /NFL /NDL /NJH /NJS /NP /R:2 /W:1 >nul
+echo Copying the tool to %RUN% ...
+robocopy "%SRC%." "%RUN%" /MIR /XD clips logs /NFL /NDL /NJH /NJS /NP /R:2 /W:1 >nul
 if errorlevel 8 (
-  echo Could not copy the tool to the laptop; running from the stick instead.
+  echo Could not copy the tool to the laptop; running from the drive instead.
   goto :run_here
 )
 cd /d "%RUN%"
 if exist "%RUN%\python\python.exe" (
-  "%RUN%\python\python.exe" "%RUN%\serve.py" 8765 --stick "%STICK%"
-  goto :eof
+  "%RUN%\python\python.exe" "%RUN%\serve.py" 8765 --home "%SRC%." %VJ_ELATO_ARGS%
+  goto :done
 )
 where python >nul 2>&1
 if %errorlevel%==0 (
-  python "%RUN%\serve.py" 8765 --stick "%STICK%"
+  python "%RUN%\serve.py" 8765 --home "%SRC%." %VJ_ELATO_ARGS%
 ) else (
-  echo No Python found. Run make_portable.py from the repo once to bundle it, or install Python 3.
-  pause
+  goto :no_python
 )
-goto :eof
+goto :done
 
 :run_here
 cd /d "%SRC%"
 if exist "%SRC%python\python.exe" (
-  "%SRC%python\python.exe" "%SRC%serve.py" 8765
-  goto :eof
+  "%SRC%python\python.exe" "%SRC%serve.py" 8765 %VJ_ELATO_ARGS%
+  goto :done
 )
 where python >nul 2>&1
 if %errorlevel%==0 (
-  python "%SRC%serve.py" 8765
+  python "%SRC%serve.py" 8765 %VJ_ELATO_ARGS%
 ) else (
-  echo No Python found. Run make_portable.py from the repo once to bundle it, or install Python 3.
-  pause
+  goto :no_python
 )
+goto :done
+
+:no_python
+echo No Python found. This copy came without the bundled one: install Python 3 from python.org,
+echo or get the full zip.
+pause
+goto :eof
+
+:done
+if errorlevel 1 pause

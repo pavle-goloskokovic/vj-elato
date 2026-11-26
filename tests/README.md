@@ -17,7 +17,7 @@ Scenarios:
   plays on WebGL, a Destockd stream falls back to the CSS layer, deck and master effects
   change the picture, the TV set slides, rolls and breaks up a paused picture, the VHS
   tape, the CRT tube and the feedback blur, vanishing point and key each change it, and a
-  reset leaves it untouched, each of the 20 deck looks (palette, edges, halftone … photocopy)
+  reset leaves it untouched, each of the 22 deck looks (palette, edges, halftone … light rays)
   changes it and leaves it untouched at zero, LED wall and halftone layer, an overlay image
   shows on the output and in the preview, moves, bounces and clears, strobe blinks, the crossfader is linear, reset fx resets,
   the generators tab lists eleven generators with thumbnails, each draws a moving picture, a paused one holds still and
@@ -29,7 +29,7 @@ Scenarios:
   stores the whole clip in the cache, a second play comes from the cache, the toggle reaches the server.
 - **youtube** – a YouTube link resolves through yt-dlp and plays on WebGL (skipped without yt-dlp).
 - **adapt** – with a faked 1.2 Mbps link the server picks a rendition below 720p.
-- **stick** – the server lists the stick (no folder picker), a clip without a sibling image gets a
+- **stick** – the server lists the tool folder's `clips` (no folder picker), a clip without a sibling image gets a
   grabbed thumbnail, plays as a same-origin URL on WebGL, and the star writes the collections file.
 - **search** – the YouTube tab searches through yt-dlp, a result plays through the proxy, and a
   resolve carries a SponsorBlock segment list.
@@ -37,7 +37,7 @@ Scenarios:
   stick requests answer 503 and the controller shows it; when it is back the library rescans and a
   playing stick clip is still playing.
 - **logging** – a load and a failed load from both pages and the server's own header land in the
-  session file on the laptop and on the stick, without status chatter.
+  session file in the tool folder's `logs`, nothing is written above that folder, and there is no status chatter.
 
 Why it is set up the way it is:
 
@@ -48,7 +48,7 @@ Why it is set up the way it is:
 - **A server with byte ranges.** Python's `http.server` has none; a `<video>` served by it
   cannot seek, and the preview drift correction then looks broken.
 - **The clip comes from the stick.** It is 12 MB and not worth committing; the test finds
-  the first drive with `destockd-index.json`, or takes `--clip`.
+  the first drive with `vj-elato/clips/destockd-index.json`, or takes `--clip`.
 
 These cannot run on GitHub's runners (no GPU, no H.264 Chrome), which is why the Pages
 workflow does not call them.

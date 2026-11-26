@@ -308,7 +308,7 @@ function updateDeckStatus(name, s) {
 // live so a deck can be preset before a clip is loaded. Everything the CSS path has
 // (blur included) also exists in the shader, so nothing is disabled on a WebGL deck.
 const GL_ONLY = new Set(['pixelate', 'rgbShift', 'posterize', 'threshold', 'mirror', 'kaleido', 'palette', 'edges', 'halftone', 'dither', 'ledWall', 'ripple', 'spiral', 'glitch',
-  'ascii', 'riso', 'warp', 'radialBlur', 'stretch', 'stretchGrid', 'interference', 'grain', 'lumalines', 'scanMod', 'fisheye', 'photocopy']);
+  'ascii', 'riso', 'warp', 'radialBlur', 'stretch', 'stretchGrid', 'interference', 'grain', 'lumalines', 'scanMod', 'fisheye', 'photocopy', 'glow', 'rays']);
 const GL_MASTER = new Set(['feedback', 'fbZoom', 'fbRotate', 'fbHue', 'fbKey', 'fbX', 'fbY', 'fbTilt', 'fbBlur', 'vhs', 'vhsTrack', 'crt', 'crtCurve', 'tvSignal', 'tvVHold', 'tvHHold', 'tvGhost', 'tvDelay', 'tvHum', 'tvBright']);
 function setAvailable(input, on, why) {
   input.disabled = !on;
@@ -667,7 +667,7 @@ function render() {
     return;
   }
   if (state.tab === 'mia' && filter.value === 'describe' && !clips.length) { results.innerHTML = `<div class="notice">${state.miaStatus || 'Describe a shot in the search box and press Enter: "a crowd cheering", "neon sign at night", "hands on a keyboard".'}</div>`; return; }
-  if (state.tab === 'youtube' && !clips.length) { results.innerHTML = `<div class="notice">${!state.online ? 'Offline: YouTube is not reachable. Cached YouTube clips are in the Stick tab.' : state.proxy && state.proxy.youtube ? 'Type a search above and press Enter.' : 'YouTube needs the local server with yt-dlp (run from the stick).'}</div>`; return; }
+  if (state.tab === 'youtube' && !clips.length) { results.innerHTML = `<div class="notice">${!state.online ? 'Offline: YouTube is not reachable. Cached YouTube clips are in the Library tab.' : state.proxy && state.proxy.youtube ? 'Type a search above and press Enter.' : 'YouTube needs the local server with yt-dlp (run from the stick).'}</div>`; return; }
   if (!clips.length) { results.innerHTML = `<div class="notice">${!state.online && (state.tab === 'destockd' || state.tab === 'spelunkr') ? 'Offline: showing only clips that are on the stick, and none match.' : 'Nothing matches.'}</div>`; return; }
   const frag = document.createDocumentFragment();
   for (const c of clips) frag.appendChild(card(c));

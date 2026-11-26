@@ -45,6 +45,7 @@ uniform vec2 crop;          // fraction trimmed from each side (x) and top/botto
 //   lumalines   rows of lines pushed up by brightness
 //   scanMod     scan lines that swell with brightness
 //   photocopy   a photocopied print: sharpened, grain under a steep curve, warm ink on cream paper
+//   glow, rays  light bleeding around bright areas; streaks of it from the middle of the picture
 /*LOOKS*/
 
 // 5x5 glyphs, sparse to dense: space . : - + = o % @ #  (bit = row * 5 + column, row 0 on top)
@@ -115,6 +116,15 @@ vec3 hueRotate(vec3 c, float a) {
   float s = sin(a), co = cos(a);
   yiq.yz = mat2(co, -s, s, co) * yiq.yz;
   return toRGB * yiq;
+}
+// The light a glow or a ray is made of: the picture from a small mip level (the renderer builds
+// the mip chain only while one of the two is on), so a handful of taps is already soft, and only
+// what is brighter than the knee, after the deck's brightness and contrast.
+vec3 lightAt(vec2 t, float lod, float knee) {
+  if (t.x < 0.0 || t.x > 1.0 || t.y < 0.0 || t.y > 1.0) return vec3(0.0);
+  vec4 sm = textureLod(tex, crop + t * (1.0 - 2.0 * crop), lod);
+  vec3 v = (sm.rgb * brightness - 0.5) * contrast + 0.5;
+  return max(v, 0.0) * sm.a * smoothstep(knee, knee + 0.35, luma(v));
 }
 
 void main() {
@@ -265,6 +275,26 @@ void main() {
   col = (col - 0.5) * contrast + 0.5;
   float l = luma(col);
   col = mix(vec3(l), col, saturate);
+  if (glow > 0.0 || rays > 0.0) {
+    vec3 light = vec3(0.0);
+    if (glow > 0.0) {                 // bright areas bleed: a ring of soft taps near, a second one further out
+      vec2 rad = (0.012 + 0.05 * glow) * vec2(1.0 / ta, 1.0);
+      vec3 acc = vec3(0.0);
+      for (int i = 0; i < 12; i++) acc += lightAt(t + TAPS[i] * rad, 3.0, 0.45) + 0.6 * lightAt(t - TAPS[i].yx * rad * 2.6, 4.5, 0.45);
+      light += acc / 12.0 * (0.5 + 1.6 * glow);
+    }
+    if (rays > 0.0) {                 // streaks from the middle of the picture through whatever is bright, fading with distance
+      vec2 dir = vec2(0.5) - t;
+      float len = mix(0.35, 0.97, rays), jit = hash(scr + 3.7);
+      vec3 acc = vec3(0.0);
+      for (float i = 0.0; i < 20.0; i++) {
+        float f = (i + jit) / 20.0;
+        acc += lightAt(t + dir * f * len, 2.0, 0.55) * (1.0 - f);
+      }
+      light += acc / 20.0 * (1.0 + 4.0 * rays);
+    }
+    col += mix(vec3(luma(light)), light, saturate);
+  }
   if (photocopy > 0.0) {
     // Sharpen first (an unsharp mask over a small cross), then add grain and only then run the
     // steep curve: the grain decides which side of the curve a mid-tone pixel lands on, so
@@ -342,7 +372,7 @@ void main() {
 const DECK_LOOKS = {
   float: ['rotate', 'hue', 'invert', 'pixelate', 'rgbShift', 'posterize', 'threshold', 'blur', 'halftone', 'dither', 'ledWall', 'ripple',
     'spiral', 'glitch', 'ascii', 'riso', 'warp', 'stretchGrid', 'interference', 'grain', 'fisheye', 'radialBlur', 'stretch', 'lumalines',
-    'scanMod', 'photocopy'],
+    'scanMod', 'photocopy', 'glow', 'rays'],
   int: ['mirror', 'kaleido', 'palette', 'edges'],
 };
 const LOOK_NAMES = [...DECK_LOOKS.float, ...DECK_LOOKS.int];
@@ -908,7 +938,12 @@ export function createRenderer(canvas) {
     const prog = deckProgram(params);
     gl.useProgram(prog.p);
     const u = prog.u;
-    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, gen ? genFbo[name].t : videoTex[name]); gl.uniform1i(u.tex, 0);
+    const src = gen ? genFbo[name].t : videoTex[name];
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, src); gl.uniform1i(u.tex, 0);
+    // glow and light rays read small mip levels of the picture: build them, this frame's, while one is on
+    const mips = (params.glow || 0) > 0 || (params.rays || 0) > 0;
+    if (mips !== !!src._mips) { gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, mips ? gl.LINEAR_MIPMAP_LINEAR : gl.LINEAR); src._mips = mips; }
+    if (mips) gl.generateMipmap(gl.TEXTURE_2D);
     if (gen) gl.uniform2f(u.texSize, W, H); else gl.uniform2f(u.texSize, videoSize[name][0], videoSize[name][1]);
     gl.uniform2f(u.outSize, W, H);
     gl.uniform1f(u.fitCover, params.fit === 'cover' ? 1 : 0);
@@ -935,7 +970,7 @@ export function createRenderer(canvas) {
     gl.uniform1f(u.glitch, params.glitch || 0);
     gl.uniform1i(u.palette, params.palette || 0);
     gl.uniform1i(u.edges, params.edges || 0);
-    for (const k of ['ascii', 'riso', 'warp', 'stretchGrid', 'interference', 'grain', 'radialBlur', 'stretch', 'lumalines', 'scanMod', 'fisheye', 'photocopy']) gl.uniform1f(u[k], params[k] || 0);
+    for (const k of ['ascii', 'riso', 'warp', 'stretchGrid', 'interference', 'grain', 'radialBlur', 'stretch', 'lumalines', 'scanMod', 'fisheye', 'photocopy', 'glow', 'rays']) gl.uniform1f(u[k], params[k] || 0);
     gl.uniform1f(u.time, time % 3600);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }

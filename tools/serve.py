@@ -1,8 +1,15 @@
 """VJ Elato local server: static files with byte ranges, plus a video proxy with a cache.
 
 usage: python serve.py [port] [folder] [--no-browser] [--cache-gb N] [--reserve-mb N] [--cache-dir DIR] [--no-cache] [--no-proxy]
-                       [--yt-max 720|1080] [--no-adapt] [--stick DIR]
-  default folder: the one this file is in (the portable copy on the stick)
+                       [--yt-max 720|1080] [--no-adapt] [--home DIR] [--library DIR]
+  default folder: the one this file is in
+
+Layout: everything lives in the tool's own folder, wherever that is and whatever it is called:
+  <home>/clips         your clips, in any folders; the library the controller lists
+  <home>/clips/cache   streams the proxy has fetched
+  <home>/logs          session logs
+<home> is the folder this file is in, or --home when the launcher has copied the tool off a
+removable drive and runs it from the laptop. --library points the library at another folder.
 
 Why a proxy: the browser may display a video from any host, but WebGL may only read
 pixels from a same-origin or CORS-enabled source, and neither Destockd's CDN nor
@@ -29,7 +36,7 @@ server learns each host's throughput from its cache downloads (and a 2.5 s probe
 first YouTube resolve) and picks the highest H.264 rendition up to --yt-max whose bitrate
 is at most half of it; --no-adapt always takes the best. /proxy/info reports the speeds.
 
-The cache lives in <stick root>/cache (the parent of the vj-elato folder), capped at
+The cache lives in <library>/cache, capped at
 --cache-gb (default 2) and never eating into --reserve-mb (default 500) of free space.
 With fetch-on-play, the first play of a stream also downloads the whole file in the
 background; a file is listed as cached only once complete. Least recently used clips
@@ -38,7 +45,7 @@ are removed to make room. Only files this proxy wrote are ever deleted.
 import hashlib, json, os, re, shutil, ssl, subprocess, sys, threading, time, urllib.error, urllib.parse, urllib.request, webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
-VALUE_FLAGS = {"--cache-gb", "--reserve-mb", "--cache-dir", "--yt-max", "--fake-speed", "--stick", "--unplug-flag"}
+VALUE_FLAGS = {"--cache-gb", "--reserve-mb", "--cache-dir", "--yt-max", "--fake-speed", "--home", "--library", "--stick", "--unplug-flag"}
 ARGS, _skip = [], False                      # positionals: port, folder; values of flags are not positionals
 for _a in sys.argv[1:]:
     if _skip: _skip = False; continue
@@ -51,12 +58,31 @@ def opt(name, default):
 ROOT = os.path.abspath(ARGS[1]) if len(ARGS) > 1 else os.path.dirname(os.path.abspath(__file__))
 PORT = int(ARGS[0]) if ARGS else 8765
 OPEN = "--no-browser" not in sys.argv
-# The stick: given with --stick when the launcher staged the tool to the laptop, otherwise the
-# parent of the vj-elato folder we run from. It may vanish and come back; see stick_present().
-# Run from a git checkout (development) there is no stick: everything stays inside the checkout,
-# so the cache and the logs do not land in the folder above the repo.
-CHECKOUT = not opt("--stick", "") and os.path.isdir(os.path.join(ROOT, ".git"))
-STICK = os.path.abspath(opt("--stick", "")) if opt("--stick", "") else (ROOT if CHECKOUT else os.path.dirname(ROOT) if os.path.basename(ROOT).lower() == "vj-elato" else ROOT)
+# HOME is the folder the user unpacked: clips, cache and logs live in it. It is ROOT, unless the
+# launcher copied the tool off a removable drive and runs this copy (STAGED), so that pulling the
+# drive cannot kill the server. STICK is the library, <home>/clips: in the staged case it may
+# vanish and come back, see stick_present(). (The name is from when the tool only ran from a
+# USB stick; --stick is still read as --library.)
+HOME = os.path.abspath(opt("--home", "")) if opt("--home", "") else ROOT
+STAGED = os.path.normcase(HOME) != os.path.normcase(ROOT)
+_lib = opt("--library", "") or opt("--stick", "")
+STICK = os.path.abspath(_lib) if _lib else os.path.join(HOME, "clips")
+def user_data_dir():
+    if os.name == "nt": base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    elif sys.platform == "darwin": base = os.path.expanduser("~/Library/Application Support")
+    else: base = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return os.path.join(base, "vj-elato")
+def can_write(folder):
+    """True if a file can be created in folder (made if missing): os.access lies on Windows."""
+    try:
+        os.makedirs(folder, exist_ok=True)
+        probe = os.path.join(folder, f".write-test-{os.getpid()}")
+        open(probe, "w").close(); os.remove(probe)
+        return True
+    except OSError: return False
+if os.path.isdir(HOME) and not _lib:
+    try: os.makedirs(STICK, exist_ok=True)       # a fresh copy: the place to put clips
+    except OSError: pass
 UNPLUG_FLAG = opt("--unplug-flag", "")          # tests: while this file exists the stick counts as absent
 
 _stick_state = {"present": None}
@@ -74,6 +100,10 @@ CACHE_DIR = os.path.abspath(opt("--cache-dir", os.path.join(STICK, "cache")))
 CACHE_CAP = int(float(opt("--cache-gb", "2")) * 1e9)
 RESERVE = int(float(opt("--reserve-mb", "500")) * 1e6)
 CACHE_ON = "--no-cache" not in sys.argv
+# Unpacked somewhere that cannot be written (a read-only share, Program Files): no cache, and the
+# log goes to the user's own data folder. A library that is merely absent right now is not that.
+READ_ONLY = os.path.isdir(STICK) and not can_write(STICK)
+if READ_ONLY and not opt("--cache-dir", ""): CACHE_ON = False
 PROXY_ON = "--no-proxy" not in sys.argv          # off = behave like plain static hosting (GitHub Pages)
 UA = "vj-elato local proxy"
 CHUNK = 256 * 1024
@@ -166,9 +196,17 @@ def youtube_id(url):
     return m.group(5) if m else None
 
 def find_ytdlp():
-    local = os.path.join(ROOT, "yt-dlp.exe" if os.name == "nt" else "yt-dlp")
-    if os.path.isfile(local): return local
-    return shutil.which("yt-dlp")
+    """The command that runs yt-dlp, as a list, or None. Next to this file: yt-dlp.exe on Windows;
+    elsewhere the plain "yt-dlp" file, which is a Python zip and runs on this Python whatever its
+    file mode says (a zip unpacked carelessly loses the executable bit)."""
+    if os.name == "nt":
+        local = os.path.join(ROOT, "yt-dlp.exe")
+        if os.path.isfile(local): return [local]
+    else:
+        local = os.path.join(ROOT, "yt-dlp")
+        if os.path.isfile(local): return [sys.executable, local]
+    found = shutil.which("yt-dlp")
+    return [found] if found else None
 
 YTDLP = find_ytdlp()
 _yt_cache, _yt_lock = {}, threading.Lock()        # id -> (info json, time)
@@ -177,7 +215,7 @@ def yt_info(vid):
     with _yt_lock:
         hit = _yt_cache.get(vid)
         if hit and time.time() - hit[1] < 3600: return hit[0]
-    cmd = [YTDLP, "--no-playlist", "--no-warnings", "-J", f"https://www.youtube.com/watch?v={vid}"]
+    cmd = [*YTDLP, "--no-playlist", "--no-warnings", "-J", f"https://www.youtube.com/watch?v={vid}"]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=150)
     except subprocess.TimeoutExpired:
@@ -227,7 +265,7 @@ def resolve_youtube(url):
     """{id, title, duration, thumbnail, height, fps, tbr, speedMbps, stall, url (stream), key} or {error}."""
     vid = youtube_id(url)
     if not vid: return {"error": "not a YouTube url"}
-    if not YTDLP: return {"error": "yt-dlp not found: put yt-dlp.exe next to serve.py or install it"}
+    if not YTDLP: return {"error": "yt-dlp not found: put yt-dlp (yt-dlp.exe on Windows) next to serve.py or install it"}
     info = yt_info(vid)
     if "error" in info: return info
     cands = yt_candidates(info)
@@ -249,7 +287,7 @@ def youtube_search(q, n=20):
     hit = _search_cache.get(key)
     if hit and time.time() - hit[1] < 600: return hit[0]
     target = q if re.match(r"^https?://", q) else f"ytsearch{n}:{q}"
-    cmd = [YTDLP, "--flat-playlist", "--no-warnings", "--playlist-end", str(n), "-J", target]
+    cmd = [*YTDLP, "--flat-playlist", "--no-warnings", "--playlist-end", str(n), "-J", target]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=90)
     except subprocess.TimeoutExpired:
@@ -453,7 +491,7 @@ cache = Cache(CACHE_DIR, CACHE_CAP, RESERVE) if (CACHE_ON and PROXY_ON) else Non
 # ---------- the stick, served ----------
 # With the server running, the controller takes its clip library from here instead of the
 # browser's folder picker: no permission prompts, works in any browser, and the player gets
-# plain same-origin URLs. Only the stick root (the parent of the vj-elato folder) is served.
+# plain same-origin URLs. Only the library folder (<home>/clips) is served.
 VIDEO_EXT = (".mp4", ".m4v", ".webm", ".mov", ".mkv", ".ogv")
 IMAGE_EXT = (".jpg", ".jpeg", ".png", ".webp")
 COLLECTIONS_FILE = "vj-elato-collections.json"
@@ -463,7 +501,7 @@ def scan_stick():
     for r, dirs, fs in os.walk(STICK):
         rel_dir = os.path.relpath(r, STICK).replace("\\", "/")
         rel_dir = "" if rel_dir == "." else rel_dir + "/"
-        dirs[:] = [d for d in dirs if not d.startswith(".") and d.lower() not in ("vj-elato", "system volume information", "$recycle.bin")]
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d.lower() not in ("system volume information", "$recycle.bin")]
         for f in fs:
             if f.startswith("."): continue
             rel = rel_dir + f; low = f.lower()
@@ -480,7 +518,7 @@ def scan_stick():
         try: return json.load(open(os.path.join(STICK, name), encoding="utf-8"))
         except Exception: return None
     own = (read_json(COLLECTIONS_FILE) or {}).get("collections", {})
-    return {"root": STICK, "writable": os.access(STICK, os.W_OK), "files": files,
+    return {"root": STICK, "writable": not READ_ONLY and os.access(STICK, os.W_OK), "files": files,
             "index": read_json("destockd-index.json"), "own": own,
             "cache": [{"url": e["url"], "file": "cache/" + e["file"], "title": e.get("title")} for e in (cache.entries.values() if cache else []) if e.get("complete")]}
 
@@ -494,7 +532,9 @@ def stick_path(rel):
 
 # ---------- session log ----------
 # One JSON line per event, from the pages (POST /log) and from this server, into a session
-# file on the laptop (<run folder>/logs) and on the stick (<stick>/vj-elato-logs). Bounded:
+# file in <home>/logs. When the tool runs staged off a removable drive there are two: one next to
+# the running copy ("laptop", which survives the drive being pulled) and one in <home>/logs on
+# the drive ("stick"). Bounded:
 # a file stops at LOG_FILE_CAP and old sessions are pruned, more strictly on the stick.
 LOG_FILE_CAP = 2_000_000
 LOG_KEEP = {"laptop": 10, "stick": 5}
@@ -506,12 +546,13 @@ class SessionLog:
     def __init__(self):
         self.name = time.strftime("session-%Y%m%d-%H%M%S.jsonl")
         self.lock = threading.Lock()
-        self.dirs = {"laptop": os.path.join(ROOT, "logs"), "stick": os.path.join(STICK, "vj-elato-logs")}
-        if CHECKOUT: del self.dirs["stick"]          # same folder as the laptop copy: one file is enough
+        self.dirs = {"laptop": os.path.join(ROOT, "logs")}
+        if STAGED: self.dirs["stick"] = os.path.join(HOME, "logs")
+        elif not can_write(self.dirs["laptop"]): self.dirs["laptop"] = os.path.join(user_data_dir(), "logs")
         self.capped = set()
         for where, d in self.dirs.items(): self.prune(where, d)
         self.write({"ts": int(time.time() * 1000), "src": "server", "level": "info", "type": "session.start",
-                    "message": f"VJ Elato server started", "details": {"version": VERSION, "root": ROOT, "stick": STICK, "stickPresent": stick_present(),
+                    "message": f"VJ Elato server started", "details": {"version": VERSION, "root": ROOT, "home": HOME, "staged": STAGED, "stick": STICK, "stickPresent": stick_present(),
                     "port": PORT, "proxy": PROXY_ON, "cache": CACHE_ON, "cacheCap": CACHE_CAP, "ytdlp": bool(YTDLP), "ytMax": YT_MAX, "adapt": ADAPT, "python": sys.version.split()[0], "os": sys.platform}})
     def prune(self, where, d):
         try:
@@ -711,18 +752,37 @@ class Handler(SimpleHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass                                   # the browser moved on, normal for video
 
+def already_running(port):
+    """True if a VJ Elato server answers on this port."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/proxy/info", timeout=1.5) as r:
+            return "stickLibrary" in json.loads(r.read().decode("utf-8"))
+    except Exception: return False
+
 if __name__ == "__main__":
-    srv = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
+    # The port may be taken. By another VJ Elato: show that one and stop. By anything else: take
+    # the next free one of the following ten (the pages only use relative addresses).
+    class Server(ThreadingHTTPServer):
+        allow_reuse_address = os.name != "nt"      # on Windows that option lets two servers share a port unnoticed
+    srv = None
+    for port in range(PORT, PORT + 11):
+        try: srv = Server(("127.0.0.1", port), Handler); PORT = port; break
+        except OSError:
+            if OPEN and already_running(port):
+                print(f"VJ Elato is already running at http://localhost:{port}/ ; opening it.")
+                webbrowser.open(f"http://localhost:{port}/"); sys.exit(0)
+            print(f"  port {port} is in use, trying the next one")
+    if not srv: sys.exit(f"no free port between {PORT} and {PORT + 10}")
     srv.daemon_threads = True
     slog = SessionLog()
-    print(f"  log: {slog.current()}" + (f"  and {slog.current('stick')}" if stick_present() and not CHECKOUT else ""))
+    print(f"  log: {slog.current()}" + (f"  and {slog.current('stick')}" if STAGED and stick_present() else ""))
     url = f"http://localhost:{PORT}/"
     print(f"VJ Elato: serving {ROOT}\n  {url}   (Ctrl+C to stop)")
-    print(f"  stick: {STICK}" + ("" if stick_present() else "  (not present right now)"))
+    print(f"  clips: {STICK}" + ("" if stick_present() else "  (not present right now)") + ("  (read-only: no cache, collections are not saved)" if READ_ONLY else ""))
     if not PROXY_ON: print("  proxy off")
     elif cache: print(f"  proxy on, cache {CACHE_DIR} ({cache.used()/1e9:.2f}/{CACHE_CAP/1e9:.1f} GB used, {cache.info()['count']} clips)")
     else: print("  proxy on, cache off")
-    if PROXY_ON: print(f"  youtube via {YTDLP}, up to {YT_MAX}p, {'quality follows the measured link' if ADAPT else 'fixed quality'}" if YTDLP else "  youtube off (no yt-dlp found)")
+    if PROXY_ON: print(f"  youtube via {YTDLP[-1]}, up to {YT_MAX}p, {'quality follows the measured link' if ADAPT else 'fixed quality'}" if YTDLP else "  youtube off (no yt-dlp found)")
     if OPEN: threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try: srv.serve_forever()
     except KeyboardInterrupt: pass

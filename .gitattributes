@@ -1,0 +1,4 @@
+# the launchers must keep their own line endings whatever the checkout does
+*.sh       text eol=lf
+*.command  text eol=lf
+*.cmd      text eol=crlf

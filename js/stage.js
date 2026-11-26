@@ -26,7 +26,7 @@ export const DEFAULT_PARAMS = {
   zoom: 1, rotate: 0, pixelate: 0, rgbShift: 0, posterize: 0, threshold: 0, mirror: 0, kaleido: 0,
   cropX: 0, cropY: 0,
   palette: 0, edges: 0, halftone: 0, dither: 0, ledWall: 0, ripple: 0, spiral: 0, glitch: 0,
-  ascii: 0, riso: 0, warp: 0, radialBlur: 0, stretch: 0, stretchGrid: 0, interference: 0, grain: 0, lumalines: 0, scanMod: 0, fisheye: 0, photocopy: 0,
+  ascii: 0, riso: 0, warp: 0, radialBlur: 0, stretch: 0, stretchGrid: 0, interference: 0, grain: 0, lumalines: 0, scanMod: 0, fisheye: 0, photocopy: 0, glow: 0, rays: 0,
   ...GEN_DEFAULTS,     // a generator's three sliders and its text: genA, genB, genC, genText
 };
 export const DEFAULT_MASTER = {

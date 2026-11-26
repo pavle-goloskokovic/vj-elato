@@ -34,7 +34,7 @@
   <main>
     <section id="library">
       <nav class="tabs">
-        <button data-tab="stick">Stick</button>
+        <button data-tab="stick" title="Your own clips: the clips folder of this copy of the tool, or the folder you picked">Library</button>
         <button data-tab="destockd" class="active">Destockd</button>
         <button data-tab="spelunkr">Spelunkr</button>
         <button data-tab="mia" title="Moving Image Archive: public domain films cut by the shot, with a search that reads the picture">Moving Image</button>
@@ -205,6 +205,8 @@
         <label><span>lumalines <small>gl</small></span> <input type="range" data-param="lumalines" min="0" max="1" step="0.01" value="0"><output></output></label>
         <label><span>scan lines <small>gl</small></span> <input type="range" data-param="scanMod" min="0" max="1" step="0.01" value="0"><output></output></label>
         <label title="A photocopied print: black and white, sharpened, mid-tones broken into speckle, warm ink on cream paper. Further right is harder and grainier. Brightness and contrast set where black ends; palette and hue can recolour it."><span>photocopy <small>gl</small></span> <input type="range" data-param="photocopy" min="0" max="1" step="0.01" value="0"><output></output></label>
+        <label title="Bright areas bleed light around them. Further right the halo is wider and stronger. Brightness and contrast decide what counts as bright."><span>glow <small>gl</small></span> <input type="range" data-param="glow" min="0" max="1" step="0.01" value="0"><output></output></label>
+        <label title="Streaks of light from the middle of the picture through whatever is bright. Further right they are longer and stronger."><span>light rays <small>gl</small></span> <input type="range" data-param="rays" min="0" max="1" step="0.01" value="0"><output></output></label>
         <button class="reset">reset fx</button>
       </div>
     </div>
